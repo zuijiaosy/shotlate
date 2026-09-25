@@ -36,6 +36,11 @@ enum FeatureChecks {
     @MainActor
     static func run(_ name: String, output: URL?) async -> Int32 {
         setvbuf(stdout, nil, _IOLBF, 0)
+        // Start from default preferences so one run's choices (colors, dashes, ratios) can't leak into the next.
+        // Only when running unbundled from .build: then the domain is the executable's, never the app's.
+        if Bundle.main.bundleIdentifier == nil {
+            UserDefaults.standard.removePersistentDomain(forName: ProcessInfo.processInfo.processName)
+        }
         PinStore.shared = PinStore(directory: outputDirectory.appendingPathComponent("pin-store", isDirectory: true))
         if let output { outputDirectory = output }
         try? FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
