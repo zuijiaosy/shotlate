@@ -80,13 +80,13 @@ enum Tool: String, CaseIterable {
 }
 
 enum MosaicMode: String { case brush, rect }
-enum MosaicEffect: String {
+enum MosaicEffect: String, Codable {
     case pixelate, blur
     /// The untouched screenshot: this is how the eraser removes annotations under it.
     case original
 }
 
-enum Shape: Equatable {
+enum Shape: Equatable, Codable {
     case rectangle(CGRect)
     case ellipse(CGRect)
     case line(CGPoint, CGPoint)

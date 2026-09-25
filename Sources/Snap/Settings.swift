@@ -144,6 +144,18 @@ final class Settings {
         defaults.set(shortcut.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: key)
     }
 
+    /// How many past captures to keep for replay (`,` / `.` in the capture overlay). 0 turns history off.
+    var historyLimit: Int {
+        get { defaults.object(forKey: "history.limit") as? Int ?? 20 }
+        set { defaults.set(max(0, newValue), forKey: "history.limit") }
+    }
+
+    /// Also keep captures that were cancelled with Esc, so an accidental Esc loses nothing.
+    var keepCancelledHistory: Bool {
+        get { defaults.bool(forKey: "history.keepCancelled") }
+        set { defaults.set(newValue, forKey: "history.keepCancelled") }
+    }
+
     /// Also save to the folder when a capture is copied or pinned.
     var autoSave: Bool {
         get { defaults.bool(forKey: "output.autoSave") }

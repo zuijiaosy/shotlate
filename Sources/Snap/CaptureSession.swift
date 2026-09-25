@@ -51,8 +51,16 @@ final class CaptureSession {
     private var views: [CaptureView] = []
     private weak var owner: CaptureView?
     private let previousApp: NSRunningApplication?
+    /// What each screen showed when the session started, to come back to after replaying history.
+    private var liveSnapshots: [CGImage] = []
+    private var liveWindowRects: [[CGRect]] = []
+    /// -1 is the live screen; 0 is the newest history entry.
+    private var historyIndex = -1
+    private var historyScreen: Int?
+    var history = CaptureHistory.shared
 
-    static func begin() {
+    /// `replay` opens straight into the most recent capture from history.
+    static func begin(replay: Bool = false) {
         guard current == nil, !isStarting else { return }
         guard CaptureEngine.hasPermission else {
             requestPermission()
@@ -71,6 +79,7 @@ final class CaptureSession {
                 let session = CaptureSession(snapshots: snapshots, windowFrames: windowFrames, previousApp: previousApp)
                 current = session
                 session.show()
+                if replay, let view = session.activeView { session.stepHistory(1, from: view) }
             } catch {
                 let alert = NSAlert()
                 alert.messageText = "截图失败"
@@ -95,6 +104,29 @@ final class CaptureSession {
         }
     }
 
+    /// An offscreen session over `image`, for scripted checks; nothing is shown on the real screens.
+    static func makeForTesting(image: CGImage, size: CGSize, history: CaptureHistory) -> CaptureSession {
+        let session = CaptureSession(previousApp: nil)
+        session.history = history
+        let window = OverlayWindow(screen: NSScreen.screens[0])
+        window.setFrame(CGRect(x: -9000, y: -9000, width: size.width, height: size.height), display: false)
+        let local = CGRect(origin: .zero, size: size)
+        let view = CaptureView(frame: local, snapshot: image, windowRects: [], displayID: 0)
+        view.session = session
+        window.contentView = CaptureRootView(frame: local, snapshot: image, captureView: view)
+        session.windows = [window]
+        session.views = [view]
+        session.liveSnapshots = [image]
+        session.liveWindowRects = [[]]
+        return session
+    }
+
+    var testing_views: [CaptureView] { views }
+
+    private init(previousApp: NSRunningApplication?) {
+        self.previousApp = previousApp
+    }
+
     private init(snapshots: [ScreenSnapshot], windowFrames: [CGRect], previousApp: NSRunningApplication?) {
         self.previousApp = previousApp
         for snapshot in snapshots {
@@ -108,6 +140,8 @@ final class CaptureSession {
             }
             let displayID = (snapshot.screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
             let window = OverlayWindow(screen: snapshot.screen)
+            liveSnapshots.append(snapshot.image)
+            liveWindowRects.append(rects)
             let view = CaptureView(frame: local, snapshot: snapshot.image, windowRects: rects, displayID: displayID)
             view.session = self
             window.contentView = CaptureRootView(frame: local, snapshot: snapshot.image, captureView: view)
@@ -127,6 +161,82 @@ final class CaptureSession {
             views[index].primeCursor()
         }
         NSCursor.crosshair.set()
+    }
+
+    private var activeView: CaptureView? {
+        views.first { $0.window?.isKeyWindow == true } ?? views.first
+    }
+
+    // MARK: History
+
+    /// Keeps `view`'s capture for replay. A replayed capture output again without changes is not stored twice.
+    func record(_ view: CaptureView) {
+        guard let entry = view.historyEntry() else { return }
+        history.record(entry, snapshot: view.snapshotImage)
+    }
+
+    /// `,` (delta 1) steps to an older capture, `.` (delta -1) back towards the live screen.
+    func stepHistory(_ delta: Int, from view: CaptureView) {
+        let entries = history.entries
+        let target = historyIndex + delta
+        guard target >= -1 else {
+            view.showMessage("已经是当前屏幕")
+            return
+        }
+        guard target < entries.count else {
+            view.showMessage(entries.isEmpty ? "还没有截图历史" : "没有更早的截图了")
+            return
+        }
+        if let other = owner, other !== view, !(historyScreen.map { views[$0] === other } ?? false) {
+            view.showMessage("请先取消另一块屏幕上的选区")
+            return
+        }
+        historyIndex = target
+        if target == -1 {
+            if let screen = historyScreen {
+                replaceView(at: screen, snapshot: liveSnapshots[screen], rects: liveWindowRects[screen], entry: nil)
+                views[screen].showMessage("回到当前屏幕")
+            }
+            historyScreen = nil
+            return
+        }
+        let entry = entries[target]
+        let index = views.firstIndex { $0.displayID == entry.displayID } ?? views.firstIndex { $0 === view } ?? 0
+        guard abs(windows[index].frame.width - entry.screenSize.width) < 1, abs(windows[index].frame.height - entry.screenSize.height) < 1 else {
+            view.showMessage("第 \(target + 1) 张来自尺寸不同的屏幕，无法回放，按 , 继续往前")
+            return
+        }
+        guard let image = history.image(for: entry) else {
+            view.showMessage("第 \(target + 1) 张截图的文件已丢失")
+            return
+        }
+        if let previous = historyScreen, previous != index {
+            replaceView(at: previous, snapshot: liveSnapshots[previous], rects: liveWindowRects[previous], entry: nil)
+        }
+        historyScreen = index
+        replaceView(at: index, snapshot: image, rects: [], entry: entry)
+        let formatter = DateFormatter()
+        formatter.dateFormat = Calendar.current.isDateInToday(entry.date) ? "HH:mm:ss" : "M月d日 HH:mm"
+        views[index].showMessage("截图历史 \(target + 1)/\(entries.count) · \(formatter.string(from: entry.date))\n, 更早 · . 更新", duration: 3)
+    }
+
+    private func replaceView(at index: Int, snapshot: CGImage, rects: [CGRect], entry: HistoryEntry?) {
+        let old = views[index]
+        old.tearDown()
+        if owner === old { owner = nil }
+        let window = windows[index]
+        let local = CGRect(origin: .zero, size: window.frame.size)
+        let view = CaptureView(frame: local, snapshot: snapshot, windowRects: rects, displayID: old.displayID)
+        view.session = self
+        window.contentView = CaptureRootView(frame: local, snapshot: snapshot, captureView: view)
+        views[index] = view
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(view)
+        if let entry {
+            view.restore(entry)
+        } else {
+            view.primeCursor()
+        }
     }
 
     func canInteract(_ view: CaptureView) -> Bool {
@@ -158,6 +268,7 @@ final class CaptureSession {
             if response == .OK, let url = panel.url {
                 do {
                     try Exporter.write(rep, format: format, to: url)
+                    if let owner { self.record(owner) }
                     self.finish()
                     HUD.show("已保存到 \(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
                 } catch {
@@ -177,6 +288,7 @@ final class CaptureSession {
     }
 
     func cancel() {
+        if Settings.shared.keepCancelledHistory, let owner { record(owner) }
         finish()
     }
 

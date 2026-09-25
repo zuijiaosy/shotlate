@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var togglePinsItem: NSMenuItem!
     private var passthroughItem: NSMenuItem!
     private var cancelDelayItem: NSMenuItem!
+    private var replayItem: NSMenuItem!
     private let countdown = Countdown()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -34,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(delayItem)
         cancelDelayItem = item("取消延时截图", #selector(cancelDelayedCapture))
         menu.addItem(cancelDelayItem)
+        replayItem = item("回放上一次截图", #selector(replayHistory))
+        menu.addItem(replayItem)
         menu.addItem(.separator())
         pinClipboardItem = item("从剪贴板贴图", #selector(pinClipboard))
         menu.addItem(pinClipboardItem)
@@ -99,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         togglePinsItem.title = (pins.isHidingAll ? "显示全部贴图" : "隐藏全部贴图") + togglePinsShortcutLabel
         passthroughItem.isHidden = !pins.hasPassthrough
         cancelDelayItem.isHidden = !countdown.isRunning
+        replayItem.isEnabled = !CaptureHistory.shared.entries.isEmpty
     }
 
     @objc private func capture() {
@@ -121,6 +125,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.resetStatusButton()
             CaptureSession.begin()
         })
+    }
+
+    @objc private func replayHistory() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { CaptureSession.begin(replay: true) }
     }
 
     @objc private func cancelDelayedCapture() {

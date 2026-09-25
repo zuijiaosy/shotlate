@@ -19,6 +19,9 @@ final class SettingsModel: ObservableObject {
     @Published var playSound = Settings.shared.playSound
     @Published var copyAsFile = Settings.shared.copyAsFile
     @Published var autoSave = Settings.shared.autoSave
+    @Published var historyLimit = Settings.shared.historyLimit
+    @Published var keepCancelledHistory = Settings.shared.keepCancelledHistory
+    @Published var historyCleared = false
     @Published var fileNameTemplate = Settings.shared.fileNameTemplate
 
     var fileNamePreview: String {
@@ -50,6 +53,9 @@ final class SettingsModel: ObservableObject {
         s.playSound = playSound
         s.copyAsFile = copyAsFile
         s.autoSave = autoSave
+        s.historyLimit = historyLimit
+        s.keepCancelledHistory = keepCancelledHistory
+        CaptureHistory.shared.prune()
         let template = fileNameTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
         s.fileNameTemplate = template.isEmpty ? FileNameTemplate.default : template
         applyLaunchAtLogin()
@@ -195,6 +201,28 @@ struct SettingsView: View {
                 Toggle("完成截图时播放音效", isOn: $model.playSound)
                 Toggle("复制图片时同时复制为文件", isOn: $model.copyAsFile)
                     .help("开启后可以在访达里直接 ⌘V 粘贴成 PNG 文件。有的聊天软件会因此把图片当成文件发送。")
+            }
+
+            Section {
+                Stepper(value: $model.historyLimit, in: 0...200, step: 5) {
+                    Text(model.historyLimit == 0 ? "截图历史：关闭" : "截图历史：保留最近 \(model.historyLimit) 张")
+                }
+                Toggle("按 Esc 取消的截图也保留", isOn: $model.keepCancelledHistory)
+                    .disabled(model.historyLimit == 0)
+                HStack {
+                    Spacer()
+                    Button(model.historyCleared ? "已清空" : "清空截图历史") {
+                        CaptureHistory.shared.clear()
+                        model.historyCleared = true
+                    }
+                    .disabled(model.historyCleared)
+                }
+            } header: {
+                Text("截图历史")
+            } footer: {
+                Text("截图时按 , 和 . 回看之前的截图，选区和标注都还在，可以继续编辑、复制或贴图。历史保存在本机的 ~/Library/Application Support/Snap/History。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("通用") {

@@ -23,10 +23,12 @@ enum FeatureChecks {
         ("polyline", polyline),
         ("copy-file", copyAsFile),
         ("auto-save", autoSave),
+        ("history", history),
     ]
 
     @MainActor
     static func run(_ name: String, output: URL?) async -> Int32 {
+        setvbuf(stdout, nil, _IOLBF, 0)
         if let output { outputDirectory = output }
         try? FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
         let selected = name == "all" ? checks : checks.filter { $0.0 == name }
@@ -360,5 +362,86 @@ enum FeatureChecks {
         files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         expect(files.count == 2 && files.contains("\(expected) 2.png"), "pinning also auto-saves, with a numbered name on collision (\(files.sorted()))")
         PinManager.shared.closeAll()
+    }
+
+    @MainActor static func history() async {
+        let dir = outputDirectory.appendingPathComponent("history", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        let store = CaptureHistory(directory: dir)
+        let settings = Settings.shared
+        let savedLimit = settings.historyLimit
+        defer { settings.historyLimit = savedLimit }
+        settings.historyLimit = 3
+
+        // Draw on a capture, then keep it.
+        let h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 400, height: 250))
+        StyleMemory.color = StyleState.palette[0]
+        h.key("r", code: 15)
+        h.drag(CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 200))
+        h.key("a", code: 0)
+        h.drag(CGPoint(x: 350, y: 250), CGPoint(x: 200, y: 150))
+        guard let entry = h.view.historyEntry() else { return expect(false, "a selection gives a history entry") }
+        let exported = h.export()
+        store.record(entry, snapshot: h.view.snapshotImage)
+        for i in 0..<3 {
+            store.record(HistoryEntry(displayID: 0, screenSize: h.size, selection: CGRect(x: i * 10, y: 0, width: 50, height: 50), items: []),
+                         snapshot: h.view.snapshotImage)
+        }
+        store.waitForWrites()
+        expect(store.entries.count == 3, "keeps only the newest \(settings.historyLimit)")
+        let folders = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        expect(folders.count == 3, "older entries are deleted from disk (\(folders.count) folders)")
+
+        // Reload from disk, as after a restart.
+        settings.historyLimit = 5
+        var fresh = entry
+        fresh.id = UUID()
+        fresh.date = Date()
+        store.record(fresh, snapshot: h.view.snapshotImage)
+        store.waitForWrites()
+        let reloaded = CaptureHistory(directory: dir)
+        let newest = reloaded.entries.first
+        expect(reloaded.entries.count == 4 && newest == fresh, "entries survive a reload with annotations intact")
+        expect(newest?.items.count == 2 && newest?.items[0].color.isApproximately(StyleState.palette[0]) == true, "annotation colors round-trip")
+
+        // Restore into a fresh overlay: same picture as the original export.
+        guard let newest, let image = reloaded.image(for: newest) else { return expect(false, "screen image loads") }
+        let replay = CaptureHarness()
+        let view = CaptureView(frame: CGRect(origin: .zero, size: replay.size), snapshot: image, windowRects: [], displayID: 0)
+        replay.window.contentView = CaptureRootView(frame: CGRect(origin: .zero, size: replay.size), snapshot: image, captureView: view)
+        view.restore(newest)
+        let restored = view.exportImage(format: .png, shadow: false)
+        if let a = exported, let b = restored {
+            let pa = a.color(atPoint: CGPoint(x: 60, y: 60))!, pb = b.color(atPoint: CGPoint(x: 60, y: 60))!
+            expect(a.size == b.size && abs(pa.redComponent - pb.redComponent) < 0.02, "restored capture exports the same image")
+            write(b, "history-restored.png")
+        }
+        expect(view.historyEntry() == nil, "outputting a replayed capture unchanged does not store it again")
+        // Step through history in a session: , goes older, . comes back to the live screen.
+        let live = CaptureHarness()
+        let session = CaptureSession.makeForTesting(image: live.snapshot, size: live.size, history: reloaded)
+        let first = session.testing_views[0]
+        first.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                             characters: ",", charactersIgnoringModifiers: ",", isARepeat: false, keyCode: 43)!)
+        let shown = session.testing_views[0]
+        expect(shown !== first && shown.testing_selection == newest.selection && shown.testing_items.count == 2,
+               ", shows the newest capture with its selection and annotations")
+        shown.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                             characters: ",", charactersIgnoringModifiers: ",", isARepeat: false, keyCode: 43)!)
+        let older = session.testing_views[0]
+        expect(older.testing_selection == reloaded.entries[1].selection, ", again steps to the next older one")
+        for _ in 0..<2 {
+            session.testing_views[0].keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                                                    context: nil, characters: ".", charactersIgnoringModifiers: ".",
+                                                                    isARepeat: false, keyCode: 47)!)
+        }
+        let back = session.testing_views[0]
+        expect(back.testing_selection == nil && back.snapshotImage === live.snapshot, ". twice returns to the live screen without a selection")
+        session.finish()
+
+        store.clear()
+        store.waitForWrites()
+        expect(!FileManager.default.fileExists(atPath: dir.path) && store.entries.isEmpty, "clear removes everything")
     }
 }

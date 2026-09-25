@@ -134,6 +134,33 @@ final class CaptureView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    var snapshotImage: CGImage { snapshot }
+    var testing_selection: CGRect? { hasSelection ? selection : nil }
+    /// The history entry this view was restored from, so re-outputting it unchanged doesn't store a duplicate.
+    private var replayedEntry: HistoryEntry?
+
+    func historyEntry() -> HistoryEntry? {
+        guard hasSelection, selection.width >= 1, selection.height >= 1 else { return nil }
+        commitText()
+        if let replayedEntry, replayedEntry.selection == selection, replayedEntry.items == items { return nil }
+        return HistoryEntry(displayID: displayID, screenSize: bounds.size, selection: selection, items: items)
+    }
+
+    /// Shows a past capture: its selection and editable annotations.
+    func restore(_ entry: HistoryEntry) {
+        replayedEntry = entry
+        selection = entry.selection.intersection(bounds)
+        items = entry.items
+        undoStack = []
+        redoStack = []
+        commitSelection()
+        updateHistoryButtons()
+    }
+
+    func showMessage(_ text: String, duration: TimeInterval = 2.5) {
+        showToast(text, duration: duration)
+    }
+
     func tearDown() {
         recognitionTask?.cancel()
         stopShimmer()
@@ -1037,6 +1064,13 @@ final class CaptureView: NSView {
             return
         }
 
+        if flags.isEmpty, key == "," || key == "." {
+            finishPolyline()
+            commitText()
+            session?.stepHistory(key == "," ? 1 : -1, from: self)
+            return
+        }
+
         guard hasSelection else {
             if let d = arrows[code] {
                 let step: CGFloat = flags.contains(.shift) ? 10 : 1
@@ -1464,6 +1498,7 @@ final class CaptureView: NSView {
         guard hasSelection, let frame = selectionOnScreen, let rep = exportImage(format: .png, shadow: false) else { return }
         StyleMemory.lastSelection[displayID] = selection
         let saved = autoSaveIfEnabled()
+        session?.record(self)
         session?.finish()
         Sound.playCapture()
         PinManager.shared.pin(rep, frame: frame)
@@ -1507,12 +1542,14 @@ final class CaptureView: NSView {
         case .copy:
             Exporter.copy(rep)
             let saved = autoSaveIfEnabled()
+            session?.record(self)
             session?.finish()
             Sound.playCapture()
             HUD.show(saved.map { "已复制，并自动保存到 \($0)" } ?? "已复制到剪贴板", on: screen)
         case .save:
             do {
                 let url = try Exporter.save(rep, format: format, directory: settings.saveDirectory)
+                session?.record(self)
                 session?.finish()
                 Sound.playCapture()
                 HUD.show("已保存到 \(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))", on: screen)
