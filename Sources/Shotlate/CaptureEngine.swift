@@ -10,7 +10,7 @@ struct ScreenSnapshot {
 enum CaptureEngine {
     static var hasPermission: Bool { CGPreflightScreenCaptureAccess() }
 
-    /// Captures every screen at full pixel resolution, leaving out Snap's own windows.
+    /// Captures every screen at full pixel resolution, leaving out Shotlate's own windows.
     static func captureScreens() async throws -> [ScreenSnapshot] {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }

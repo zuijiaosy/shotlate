@@ -1,6 +1,6 @@
 import AppKit
 import CoreImage
-import SnapCore
+import ShotlateCore
 
 /// Style choices remembered across captures. Color and size are kept per tool, and saved across launches.
 enum StyleMemory {
@@ -1378,7 +1378,7 @@ final class CaptureView: NSView {
 
         let config = Settings.shared.translationConfig
         guard !config.apiKey.isEmpty else {
-            showToast("还没有填写 API Key。请按 Esc 退出截图，在菜单栏 Snap → 设置 中填写。", duration: 5)
+            showToast("还没有填写 API Key。请按 Esc 退出截图，在菜单栏 Shotlate → 设置 中填写。", duration: 5)
             return
         }
         guard recognitionTask == nil else { return }

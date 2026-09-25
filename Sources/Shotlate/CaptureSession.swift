@@ -1,5 +1,5 @@
 import AppKit
-import SnapCore
+import ShotlateCore
 
 /// Borderless full-screen window that can take keyboard focus.
 final class OverlayWindow: NSWindow {
@@ -86,7 +86,7 @@ final class CaptureSession {
         CGRequestScreenCaptureAccess()
         let alert = NSAlert()
         alert.messageText = "需要屏幕录制权限"
-        alert.informativeText = "请在「系统设置 → 隐私与安全性 → 屏幕与系统录音」中允许 Snap，然后重新打开 Snap。"
+        alert.informativeText = "请在「系统设置 → 隐私与安全性 → 屏幕与系统录音」中允许 Shotlate，然后重新打开 Shotlate。"
         alert.addButton(withTitle: "打开系统设置")
         alert.addButton(withTitle: "稍后")
         NSApp.activate()

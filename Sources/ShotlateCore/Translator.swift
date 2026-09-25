@@ -29,7 +29,7 @@ public enum TranslationError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "还没有填写 API Key。请在菜单栏 Snap → 设置 中填写。"
+            return "还没有填写 API Key。请在菜单栏 Shotlate → 设置 中填写。"
         case .invalidBaseURL(let url):
             return "Base URL 无效：\(url)"
         case .http(let status, let message):

@@ -1,9 +1,9 @@
 import AppKit
-import SnapCore
+import ShotlateCore
 
 /// Command-line entry points for checking OCR and in-place translation without the capture UI.
 ///
-///   Snap --translate-image input.png output.png [--scale 2]
+///   Shotlate --translate-image input.png output.png [--scale 2]
 ///
 /// Uses the API key from DEEPSEEK_API_KEY. Without a key it substitutes
 /// placeholder translations so layout and rendering can still be checked.

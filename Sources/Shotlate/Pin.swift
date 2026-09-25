@@ -1,5 +1,5 @@
 import AppKit
-import SnapCore
+import ShotlateCore
 
 /// Keeps track of open pins, and whether they are all hidden.
 final class PinManager {

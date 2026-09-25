@@ -4,7 +4,7 @@ import AppKit
 /// scrolls it programmatically while `ScrollCaptureController` captures the list area, and writes the result.
 /// Needs Screen Recording permission for the process that runs it.
 ///
-///   Snap --scroll-demo output.png
+///   Shotlate --scroll-demo output.png
 enum ScrollDemo {
     @MainActor
     static func run(output: URL) {
@@ -13,7 +13,7 @@ enum ScrollDemo {
         let size = CGSize(width: 420, height: 380)
         let window = NSWindow(contentRect: CGRect(x: visible.minX + 40, y: visible.maxY - size.height - 40, width: size.width, height: size.height),
                               styleMask: [.titled], backing: .buffered, defer: false)
-        window.title = "Snap 长截图测试"
+        window.title = "Shotlate 长截图测试"
         window.level = .floating
         window.isReleasedWhenClosed = false
 

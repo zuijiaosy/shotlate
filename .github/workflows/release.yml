@@ -1,4 +1,4 @@
-# Every push to main builds a universal Snap.app, packs it into a DMG and publishes a GitHub release
+# Every push to main builds a universal Shotlate.app, packs it into a DMG and publishes a GitHub release
 # whose notes list the commits since the previous release.
 #
 # Version: major.minor come from CFBundleShortVersionString in Resources/Info.plist; the patch number
@@ -10,6 +10,12 @@
 #   MACOS_CERTIFICATE           base64 of the "Developer ID Application" .p12
 #   MACOS_CERTIFICATE_PASSWORD  password of that .p12
 #   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   for notarytool (app-specific password)
+#
+# Cloudflare R2 (optional): the DMG is also uploaded to an R2 bucket, as Shotlate-<version>.dmg and as
+# Shotlate-latest.dmg, which the website can link to. Skipped until both of these are set:
+#   secret   CLOUDFLARE_API_TOKEN    API token with "Workers R2 Storage: Edit"
+#   secret   CLOUDFLARE_ACCOUNT_ID   the Cloudflare account ID
+#   variable R2_BUCKET               bucket name (Settings → Secrets and variables → Actions → Variables)
 name: Release
 
 on:
@@ -30,6 +36,9 @@ jobs:
     runs-on: macos-26
     env:
       MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_BUCKET: ${{ vars.R2_BUCKET }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -78,7 +87,7 @@ jobs:
           ARCHS: arm64 x86_64
         run: |
           scripts/build-app.sh
-          lipo -archs build/Snap.app/Contents/MacOS/Snap
+          lipo -archs build/Shotlate.app/Contents/MacOS/Shotlate
 
       - name: Package DMG
         run: scripts/make-dmg.sh "${{ steps.version.outputs.version }}"
@@ -90,7 +99,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          dmg="build/Snap-${{ steps.version.outputs.version }}.dmg"
+          dmg="build/Shotlate-${{ steps.version.outputs.version }}.dmg"
           xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
           xcrun stapler staple "$dmg"
 
@@ -100,10 +109,10 @@ jobs:
             scripts/release-notes.sh "${{ steps.version.outputs.previous }}"
             echo "### 安装"
             echo
-            echo "下载 \`Snap-${{ steps.version.outputs.version }}.dmg\`，打开后把 Snap 拖进「应用程序」。支持 macOS 14 及以上，Apple 芯片和 Intel 通用。"
+            echo "下载 \`Shotlate-${{ steps.version.outputs.version }}.dmg\`，打开后把 Shotlate 拖进「应用程序」。支持 macOS 14 及以上，Apple 芯片和 Intel 通用。"
             if [ -z "$MACOS_CERTIFICATE" ]; then
               echo
-              echo "这个版本没有经过 Apple 公证，首次打开时请在「应用程序」里右键 Snap →「打开」；如果提示「已损坏」，在终端运行 \`xattr -dr com.apple.quarantine /Applications/Snap.app\`。更新后可能需要重新授予屏幕录制权限。"
+              echo "这个版本没有经过 Apple 公证，首次打开时请在「应用程序」里右键 Shotlate →「打开」；如果提示「已损坏」，在终端运行 \`xattr -dr com.apple.quarantine /Applications/Shotlate.app\`。更新后可能需要重新授予屏幕录制权限。"
             fi
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
@@ -113,7 +122,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ steps.version.outputs.version }}"
-          gh release create "v$version" "build/Snap-$version.dmg" \
+          gh release create "v$version" "build/Shotlate-$version.dmg" \
             --target "$GITHUB_SHA" \
-            --title "Snap $version" \
+            --title "Shotlate $version" \
             --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Upload to Cloudflare R2
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.R2_BUCKET != ''
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          dmg="build/Shotlate-$version.dmg"
+          npx --yes wrangler@4 r2 object put "$R2_BUCKET/Shotlate-$version.dmg" --file "$dmg" \
+            --content-type application/x-apple-diskimage --remote
+          # A fixed name for "download the latest"; not cached, so a new release shows up right away.
+          npx --yes wrangler@4 r2 object put "$R2_BUCKET/Shotlate-latest.dmg" --file "$dmg" \
+            --content-type application/x-apple-diskimage --cache-control "no-cache" --remote

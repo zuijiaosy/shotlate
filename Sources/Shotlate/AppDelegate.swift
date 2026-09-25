@@ -1,5 +1,5 @@
 import AppKit
-import SnapCore
+import ShotlateCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.mainMenu = makeMainMenu()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Snap")
+        let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Shotlate")
         image?.isTemplate = true
         statusItem.button?.image = image
 
@@ -46,14 +46,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(item("设置…", #selector(openSettings), ","))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "退出 Snap", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "退出 Shotlate", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
         registerHotKeys()
         let center = NotificationCenter.default
         center.addObserver(forName: Settings.didChange, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
-        center.addObserver(forName: .snapPauseHotKey, object: nil, queue: .main) { _ in HotKeyCenter.shared.unregisterAll() }
-        center.addObserver(forName: .snapResumeHotKey, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
+        center.addObserver(forName: .pauseHotKeys, object: nil, queue: .main) { _ in HotKeyCenter.shared.unregisterAll() }
+        center.addObserver(forName: .resumeHotKeys, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
 
         TextRecognizer.warmUp()
 
@@ -155,7 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let main = NSMenu()
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(NSMenuItem(title: "退出 Snap", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appMenu.addItem(NSMenuItem(title: "退出 Shotlate", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
         main.addItem(appItem)
 

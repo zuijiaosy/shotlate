@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>Snap</string>
+	<string>Shotlate</string>
 	<key>CFBundleDisplayName</key>
-	<string>Snap</string>
+	<string>Shotlate</string>
 	<key>CFBundleIdentifier</key>
-	<string>app.snap.Snap</string>
+	<string>app.shotlate.Shotlate</string>
 	<key>CFBundleExecutable</key>
-	<string>Snap</string>
+	<string>Shotlate</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
@@ -27,6 +27,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Snap 需要屏幕录制权限来截取屏幕内容。</string>
+	<string>Shotlate 需要屏幕录制权限来截取屏幕内容。</string>
 </dict>
 </plist>

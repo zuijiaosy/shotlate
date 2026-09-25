@@ -1,16 +1,16 @@
 import AppKit
 import Carbon.HIToolbox
 import CoreImage
-import SnapCore
+import ShotlateCore
 import SwiftUI
 
-/// Scripted behaviour checks that need AppKit (windows, pasteboard, rendering) and so can't live in SnapCore's tests.
+/// Scripted behaviour checks that need AppKit (windows, pasteboard, rendering) and so can't live in ShotlateCore's tests.
 /// Each check prints PASS/FAIL lines and the process exits non-zero if any expectation failed.
 ///
-///   Snap --check <name|all> [output-directory]
+///   Shotlate --check <name|all> [output-directory]
 enum FeatureChecks {
     @MainActor private static var failures = 0
-    @MainActor static var outputDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("snap-checks")
+    @MainActor static var outputDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("shotlate-checks")
 
     @MainActor static func expect(_ condition: Bool, _ message: String) {
         print(condition ? "PASS  \(message)" : "FAIL  \(message)")
@@ -120,7 +120,7 @@ enum FeatureChecks {
 
     @MainActor static func pinClipboard() async {
         let manager = PinManager.shared
-        let pb = NSPasteboard(name: NSPasteboard.Name("app.snap.check"))
+        let pb = NSPasteboard(name: NSPasteboard.Name("app.shotlate.check"))
         func pinned(_ fill: () -> Void) -> [PinWindow] {
             pb.clearContents()
             fill()
@@ -399,11 +399,11 @@ enum FeatureChecks {
         ctx.setFillColor(CGColor(gray: 0.95, alpha: 1))
         ctx.fill(CGRect(origin: .zero, size: size))
         let ci = CIContext()
-        ctx.draw(ci.createCGImage(qr("https://snap.example/app"), from: qr("https://snap.example/app").extent)!, in: CGRect(x: 200, y: 300, width: 264, height: 264))
+        ctx.draw(ci.createCGImage(qr("https://shotlate.example/app"), from: qr("https://shotlate.example/app").extent)!, in: CGRect(x: 200, y: 300, width: 264, height: 264))
         ctx.draw(ci.createCGImage(qr("WIFI:S:Office;P:12345678;;"), from: qr("WIFI:S:Office;P:12345678;;").extent)!, in: CGRect(x: 1000, y: 500, width: 296, height: 296))
         let screen = ctx.makeImage()!
         let codes = await CodeScanner.scan([screen, screen])
-        expect(codes.count == 2 && codes.contains("https://snap.example/app") && codes.contains("WIFI:S:Office;P:12345678;;"),
+        expect(codes.count == 2 && codes.contains("https://shotlate.example/app") && codes.contains("WIFI:S:Office;P:12345678;;"),
                "finds both codes on the screen, without duplicates across screens (\(codes))")
         let blank = sampleRep(CGSize(width: 400, height: 300), color: .white).cgImage!
         let none = await CodeScanner.scan([blank])

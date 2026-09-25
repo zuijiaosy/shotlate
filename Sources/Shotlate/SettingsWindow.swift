@@ -1,6 +1,6 @@
 import AppKit
 import ServiceManagement
-import SnapCore
+import ShotlateCore
 import SwiftUI
 
 enum ShortcutTarget: Equatable { case capture, pinClipboard, togglePins, scanCode }
@@ -103,7 +103,7 @@ final class SettingsModel: ObservableObject {
     func startRecording(_ target: ShortcutTarget) {
         if recording != nil { stopRecordingShortcut() }
         recording = target
-        NotificationCenter.default.post(name: .snapPauseHotKey, object: nil)
+        NotificationCenter.default.post(name: .pauseHotKeys, object: nil)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             if event.keyCode == 53 { // Esc cancels recording
@@ -128,13 +128,13 @@ final class SettingsModel: ObservableObject {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         recording = nil
-        NotificationCenter.default.post(name: .snapResumeHotKey, object: nil)
+        NotificationCenter.default.post(name: .resumeHotKeys, object: nil)
     }
 }
 
 extension Notification.Name {
-    static let snapPauseHotKey = Notification.Name("SnapPauseHotKey")
-    static let snapResumeHotKey = Notification.Name("SnapResumeHotKey")
+    static let pauseHotKeys = Notification.Name("ShotlatePauseHotKey")
+    static let resumeHotKeys = Notification.Name("ShotlateResumeHotKey")
 }
 
 struct SettingsView: View {
@@ -182,7 +182,7 @@ struct SettingsView: View {
             }
 
             Section("通用") {
-                Toggle("登录时启动 Snap", isOn: $model.launchAtLogin)
+                Toggle("登录时启动 Shotlate", isOn: $model.launchAtLogin)
                 if let error = model.loginItemError {
                     Text(error).font(.callout).foregroundStyle(.red)
                 }
@@ -211,7 +211,7 @@ struct SettingsView: View {
             } header: {
                 Text("翻译")
             } footer: {
-                Text("使用 OpenAI 兼容接口，默认是 DeepSeek 的 deepseek-flash。API Key 保存在本机的 ~/Library/Application Support/Snap/api-key，只有你的账户能读取。发送给翻译服务的只有识别出的文字，截图本身不会上传。")
+                Text("使用 OpenAI 兼容接口，默认是 DeepSeek 的 deepseek-flash。API Key 保存在本机的 ~/Library/Application Support/Shotlate/api-key，只有你的账户能读取。发送给翻译服务的只有识别出的文字，截图本身不会上传。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -239,7 +239,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.contentMinSize = CGSize(width: 480, height: 420)
         window.contentMaxSize = CGSize(width: 480, height: 4000)
-        window.title = "Snap 设置"
+        window.title = "Shotlate 设置"
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.delegate = self

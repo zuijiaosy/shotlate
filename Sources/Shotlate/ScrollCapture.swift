@@ -1,6 +1,6 @@
 import AppKit
 import ScreenCaptureKit
-import SnapCore
+import ShotlateCore
 
 /// Long screenshot: captures a screen region repeatedly while the user scrolls it,
 /// and stitches the frames with `ScrollStitcher`.
@@ -13,7 +13,7 @@ final class ScrollCaptureController {
     private let frameWindow: NSWindow
     private let panel: ScrollCapturePanel
     private let stitcher: ScrollStitcher
-    private let stitchQueue = DispatchQueue(label: "app.snap.stitch", qos: .userInitiated)
+    private let stitchQueue = DispatchQueue(label: "app.shotlate.stitch", qos: .userInitiated)
     private var filter: SCContentFilter?
     private var captureTimer: Timer?
     private var inFlight = false
@@ -64,7 +64,7 @@ final class ScrollCaptureController {
         frameWindow.orderFrontRegardless()
         panel.place(next: rect, on: screen)
         panel.orderFrontRegardless()
-        panel.setStatus("在框内滚动鼠标或触控板，Snap 会自动拼接。框选时避开滚动条，效果更好。")
+        panel.setStatus("在框内滚动鼠标或触控板，Shotlate 会自动拼接。框选时避开滚动条，效果更好。")
 
         Task { @MainActor in
             do {
@@ -104,7 +104,7 @@ final class ScrollCaptureController {
             defer { inFlight = false }
             guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config),
                   !finished else { return }
-            if let dir = ProcessInfo.processInfo.environment["SNAP_DUMP_FRAMES"], dumped < 4 {
+            if let dir = ProcessInfo.processInfo.environment["SHOTLATE_DUMP_FRAMES"], dumped < 4 {
                 dumped += 1
                 try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?
                     .write(to: URL(fileURLWithPath: dir).appendingPathComponent("frame\(dumped).png"))
@@ -120,7 +120,7 @@ final class ScrollCaptureController {
     }
 
     private func handle(_ result: ScrollStitcher.Result) {
-        if ProcessInfo.processInfo.environment["SNAP_DEBUG_STITCH"] != nil { print("stitch:", result, stitcher.height) }
+        if ProcessInfo.processInfo.environment["SHOTLATE_DEBUG_STITCH"] != nil { print("stitch:", result, stitcher.height) }
         switch result {
         case .started, .appended:
             panel.setStatus("\(stitcher.height.formatted()) px · 继续滚动，或点完成")

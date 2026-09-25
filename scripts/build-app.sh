@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds Snap.app into ./build.
+# Builds Shotlate.app into ./build.
 #   scripts/build-app.sh            release build for this Mac's architecture
 #   SIGN_IDENTITY="Apple Development: …" scripts/build-app.sh
 #   ARCHS="arm64 x86_64" scripts/build-app.sh      universal binary
@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIG="${CONFIG:-release}"
-APP=build/Snap.app
+APP=build/Shotlate.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -20,12 +20,12 @@ if [ -n "${ARCHS:-}" ]; then
   SLICES=()
   for arch in $ARCHS; do
     swift build -c "$CONFIG" --arch "$arch"
-    SLICES+=("$(swift build -c "$CONFIG" --arch "$arch" --show-bin-path)/Snap")
+    SLICES+=("$(swift build -c "$CONFIG" --arch "$arch" --show-bin-path)/Shotlate")
   done
-  lipo -create "${SLICES[@]}" -output "$APP/Contents/MacOS/Snap"
+  lipo -create "${SLICES[@]}" -output "$APP/Contents/MacOS/Shotlate"
 else
   swift build -c "$CONFIG"
-  cp "$(swift build -c "$CONFIG" --show-bin-path)/Snap" "$APP/Contents/MacOS/Snap"
+  cp "$(swift build -c "$CONFIG" --show-bin-path)/Shotlate" "$APP/Contents/MacOS/Shotlate"
 fi
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -44,5 +44,5 @@ FLAGS=()
 if [[ "$IDENTITY" == "Developer ID Application:"* ]]; then
   FLAGS=(--options runtime --timestamp)
 fi
-codesign --force --sign "${IDENTITY:--}" ${FLAGS[@]+"${FLAGS[@]}"} --identifier app.snap.Snap "$APP"
+codesign --force --sign "${IDENTITY:--}" ${FLAGS[@]+"${FLAGS[@]}"} --identifier app.shotlate.Shotlate "$APP"
 echo "Built $APP (signed with: ${IDENTITY:-ad-hoc})"

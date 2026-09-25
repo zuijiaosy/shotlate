@@ -1,5 +1,5 @@
 import AppKit
-import SnapCore
+import ShotlateCore
 import Vision
 
 struct RecognitionResult {
@@ -87,7 +87,7 @@ enum TranslationLayout {
             // Bold stems are clearly thicker relative to the line height than regular ones.
             let strokeRatio = colors.strokeWidth / Double(max(1, block.lineHeight * scale))
             let bold = strokeRatio > 0.17
-            if ProcessInfo.processInfo.environment["SNAP_DEBUG_LAYOUT"] != nil {
+            if ProcessInfo.processInfo.environment["SHOTLATE_DEBUG_LAYOUT"] != nil {
                 print("  block #\(block.id) stroke \(String(format: "%.3f", strokeRatio)) centered \(colors.isCentered)")
             }
             let (fontSize, height) = fit(text, in: rect, lineHeight: block.lineHeight, bold: bold)

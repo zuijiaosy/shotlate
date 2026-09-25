@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
-@testable import SnapCore
+@testable import ShotlateCore
 
 @Suite struct GeometryTests {
     @Test func visionBoxFlipsToTopLeftOrigin() {
@@ -29,7 +29,7 @@ import Testing
             line("Settings", x: 10, y: 10, w: 60, h: 18),
             line("Automatically check for updates", x: 10, y: 50),
             line("and download them in the background.", x: 10, y: 68),
-            line("Save to: ~/Pictures/Snap", x: 10, y: 120),
+            line("Save to: ~/Pictures/Shotlate", x: 10, y: 120),
         ])
         #expect(blocks.count == 3)
         #expect(blocks[1].text == "Automatically check for updates and download them in the background.")
@@ -65,7 +65,7 @@ import Testing
         #expect(TextBlockBuilder.shouldTranslate("Version 2.6.8"))
         #expect(!TextBlockBuilder.shouldTranslate("2.6.8"))
         #expect(!TextBlockBuilder.shouldTranslate("https://api.deepseek.com/v1"))
-        #expect(!TextBlockBuilder.shouldTranslate("~/Pictures/Snap"))
+        #expect(!TextBlockBuilder.shouldTranslate("~/Pictures/Shotlate"))
         #expect(!TextBlockBuilder.shouldTranslate("自动检查更新 OK"))
         #expect(!TextBlockBuilder.shouldTranslate("42"))
         #expect(!TextBlockBuilder.shouldTranslate("dev@example.com"))

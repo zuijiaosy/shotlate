@@ -1,4 +1,4 @@
-# Snap
+# Shotlate
 
 小而精的 macOS 截图工具：快捷键截图、标注、贴图、长截图。另外加了**原位翻译**：识别截图里的外文，用大模型翻译后直接画回原文的位置。
 
@@ -6,13 +6,15 @@
 - 翻译使用 OpenAI 兼容接口，默认是 DeepSeek 的 `deepseek-flash`。只发送识别出的文字，截图本身不上传。
 - 纯 Swift 编写，没有第三方依赖。要求 macOS 14 或更高版本。
 
+官网：[shotlate.workers.dev](https://shotlate.workers.dev) · 下载：[最新版本](https://github.com/zuijiaosy/shotlate/releases/latest)
+
 ## 构建
 
 只需要安装 Command Line Tools，不需要 Xcode。
 
 ```bash
-scripts/build-app.sh      # 生成 build/Snap.app
-open build/Snap.app
+scripts/build-app.sh      # 生成 build/Shotlate.app
+open build/Shotlate.app
 scripts/test.sh           # 运行单元测试
 ```
 
@@ -20,27 +22,28 @@ scripts/test.sh           # 运行单元测试
 
 ```bash
 ARCHS="arm64 x86_64" scripts/build-app.sh   # 通用二进制（Apple 芯片 + Intel）
-scripts/make-dmg.sh 0.1.0                   # 打包成 build/Snap-0.1.0.dmg
+scripts/make-dmg.sh 0.1.0                   # 打包成 build/Shotlate-0.1.0.dmg
 ```
 
 ## 发布
 
-推送到 `main` 后，GitHub Actions（`.github/workflows/release.yml`）会运行单元测试，构建通用版 Snap.app，打包 DMG，并发布 GitHub Release，更新说明按提交信息自动生成（`feat` 归入新功能，`fix` 归入修复，提交正文里的 `- ` 列表作为细节）。
+推送到 `main` 后，GitHub Actions（`.github/workflows/release.yml`）会运行单元测试，构建通用版 Shotlate.app，打包 DMG，并发布 GitHub Release，更新说明按提交信息自动生成（`feat` 归入新功能，`fix` 归入修复，提交正文里的 `- ` 列表作为细节）。
 
 - 版本号：主、次版本取自 `Resources/Info.plist`，补丁号在上一个同系列标签上加一；要开始 0.2 系列，把 Info.plist 改成 `0.2.0`。
 - 提交信息里带 `[skip release]` 时只推送、不发布。
 - 默认 ad-hoc 签名，首次打开需要右键「打开」。在仓库 Secrets 里配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD` 后，改用 Developer ID 签名并公证。
+- 可选：同时上传到 Cloudflare R2。在仓库 Secrets 里加 `CLOUDFLARE_API_TOKEN`（需要「Workers R2 存储：编辑」权限）和 `CLOUDFLARE_ACCOUNT_ID`，在 Variables 里加 `R2_BUCKET`（存储桶名）后，每次发布会把 DMG 传成 `Shotlate-<版本>.dmg` 和固定名字的 `Shotlate-latest.dmg`。存储桶开启公开访问后，官网把下载地址设成 `https://<公开域名>/Shotlate-latest.dmg` 即可；没配置时这一步自动跳过，官网下载按钮跳到 GitHub 的最新发布页。
 
 ## 使用
 
-首次启动时，请在「系统设置 → 隐私与安全性 → 屏幕与系统录音」中允许 Snap，然后重新打开它。
+首次启动时，请在「系统设置 → 隐私与安全性 → 屏幕与系统录音」中允许 Shotlate，然后重新打开它。
 
 **选区**
 
 | 操作 | 方式 |
 | --- | --- |
 | 开始截图 | `⌥A`（可在设置中修改），或点菜单栏图标 |
-| 延时截图 | 菜单栏 Snap → 延时截图 → 3 / 5 / 10 秒后。菜单栏图标旁显示倒计时，这段时间可以打开菜单、悬停出提示再截；可从菜单取消 |
+| 延时截图 | 菜单栏 Shotlate → 延时截图 → 3 / 5 / 10 秒后。菜单栏图标旁显示倒计时，这段时间可以打开菜单、悬停出提示再截；可从菜单取消 |
 | 框选 | 拖拽；按住 `⇧` 锁定 1:1 |
 | 选窗口 / 全屏 | 单击光标下高亮的窗口；什么都没指到时单击选中整个屏幕 |
 | 放大镜 | 选区时自动出现，显示坐标和像素颜色；`C` 复制颜色，`⇧` 在 HEX 和 RGB 之间切换 |
@@ -71,33 +74,33 @@ scripts/make-dmg.sh 0.1.0                   # 打包成 build/Snap-0.1.0.dmg
 | 识别文字 | `X`：识别选区里的文字，在旁边显示可编辑的结果（点「复制」按钮才复制），同时在图上标出识别到的文字 |
 | 翻译 | `Y`：把译文画回原位；再按一次切换原文和译文 |
 | 复制 | `Return`、`⌘C` 或双击选区 |
-| 保存 | `⌘S` 直接保存到设置里的文件夹（默认是「下载」文件夹 `~/Downloads`，文件名如 `Snap 2026-09-25 15.30.00.png`）；`⇧⌘S` 另存为 |
+| 保存 | `⌘S` 直接保存到设置里的文件夹（默认是「下载」文件夹 `~/Downloads`，文件名如 `Shotlate 2026-09-25 15.30.00.png`）；`⇧⌘S` 另存为 |
 | 贴图 | `T`（或 `⌘T`）：把选区（含标注和译文）钉在屏幕原来的位置 |
 | 长截图 | `S`：在选区里滚动，自动拼接成长图 |
 | 后退一步 / 退出 | `Esc` 逐级后退：提交文字 → 关闭识别结果 → 取消选中 → 放下工具 → 退出截图；右键同理，但有标注时不会退出 |
 
-**扫码**：菜单栏 Snap → 扫描屏幕上的二维码 / 条形码（可在设置里绑定快捷键）。直接识别所有屏幕上的码并复制内容；是网址时可以一键在浏览器打开。
+**扫码**：菜单栏 Shotlate → 扫描屏幕上的二维码 / 条形码（可在设置里绑定快捷键）。直接识别所有屏幕上的码并复制内容；是网址时可以一键在浏览器打开。
 
 **贴图**
 
 | 操作 | 方式 |
 | --- | --- |
-| 从剪贴板贴图 | `⌥⇧V`（可在设置中修改或清除），或菜单栏 Snap → 从剪贴板贴图。能贴剪贴板里的图片，以及访达里复制的图片文件（多张会依次错开） |
+| 从剪贴板贴图 | `⌥⇧V`（可在设置中修改或清除），或菜单栏 Shotlate → 从剪贴板贴图。能贴剪贴板里的图片，以及访达里复制的图片文件（多张会依次错开） |
 | 移动 | 拖动；方向键移动 1pt，按住 `⇧` 每次 10pt |
 | 缩放 / 透明度 | 滚轮以光标为中心缩放（10% 到 800%），或 `=` / `-`；`⌥` + 滚轮调透明度；`0` 或中键恢复 100% |
 | 选择文字 | 贴图里的文字会在后台自动识别，鼠标移到文字上变成 I 形光标，像输入框一样拖选（可跨行），双击选词、三击选整行，`⇧` + 单击扩展选区；`⌘C` 复制选中的文字。在空白处拖动仍然移动贴图 |
 | 复制 / 保存 | `⌘C` / `⌘S`（有选中的文字时 `⌘C` 复制文字，右键 → 复制图片） |
 | 翻译 | `Y` 或右键 → 翻译：识别贴图里的外文并把译文画回原位，再按 `Y` 在原文和译文之间切换（需要在设置里填好翻译接口） |
 | 标注 | 空格或右键 → 标注…：在贴图上用截图的全部工具标注（包括翻译）；✓ 或回车完成，`⌘C` / `⌘S` 完成的同时复制 / 保存，`Esc` 放弃。标注时贴图临时回到 100%，完成后恢复原来的缩放 |
-| 关闭 | `Esc` 或 `⌘W`（有选中的文字时，第一次 `Esc` 先取消选择）；菜单栏 Snap → 关闭全部贴图 |
-| 隐藏 / 显示全部 | `⌥⇧H`（可在设置中修改或清除），或菜单栏 Snap → 隐藏全部贴图。隐藏不等于关闭：贴图仍然保留，再按一次就回来 |
+| 关闭 | `Esc` 或 `⌘W`（有选中的文字时，第一次 `Esc` 先取消选择）；菜单栏 Shotlate → 关闭全部贴图 |
+| 隐藏 / 显示全部 | `⌥⇧H`（可在设置中修改或清除），或菜单栏 Shotlate → 隐藏全部贴图。隐藏不等于关闭：贴图仍然保留，再按一次就回来 |
 | 右键菜单 | 复制、保存、标注、翻译、缩放、透明度、关闭 |
 
 边框颜色表示状态：蓝色是当前贴图，灰色是其他贴图。
 
 **长截图**
 
-框选要滚动的区域后按 `S`。截图遮罩会关闭，选区外面留一圈蓝色虚线框，旁边出现控制面板。在框里正常滚动鼠标或触控板，Snap 会自动拼接，面板里实时显示预览和高度。点「完成」后可以查看整张长图，然后复制、保存或贴图。
+框选要滚动的区域后按 `S`。截图遮罩会关闭，选区外面留一圈蓝色虚线框，旁边出现控制面板。在框里正常滚动鼠标或触控板，Shotlate 会自动拼接，面板里实时显示预览和高度。点「完成」后可以查看整张长图，然后复制、保存或贴图。
 
 - 固定的导航栏和底部工具栏只会出现一次，不会在长图里重复。
 - 框选时避开滚动条效果更好；滚得太快、两帧之间没有重叠时，面板会提示放慢速度。
@@ -105,15 +108,15 @@ scripts/make-dmg.sh 0.1.0                   # 打包成 build/Snap-0.1.0.dmg
 
 ## 设置
 
-菜单栏 Snap → 设置 里可以修改截图、贴图、隐藏贴图和扫码的快捷键，保存位置和格式，以及设置登录时启动。
+菜单栏 Shotlate → 设置 里可以修改截图、贴图、隐藏贴图和扫码的快捷键，保存位置和格式，以及设置登录时启动。
 
 ## 翻译设置
 
-菜单栏 Snap → 设置：
+菜单栏 Shotlate → 设置：
 
 - **Base URL**：默认 `https://api.deepseek.com`。任何 OpenAI 兼容服务都可以用。
 - **模型**：默认 `deepseek-flash`。
-- **API Key**：保存在 `~/Library/Application Support/Snap/api-key`，文件权限只允许你的账户读写。不用钥匙串，重新安装或更新后也不会再弹密码框。
+- **API Key**：保存在 `~/Library/Application Support/Shotlate/api-key`，文件权限只允许你的账户读写。不用钥匙串，重新安装或更新后也不会再弹密码框。
 - **译成**：简体中文（默认）、繁體中文、English、日本語、한국어。
 
 填好后可以点「测试连接」检查配置。
@@ -121,16 +124,16 @@ scripts/make-dmg.sh 0.1.0                   # 打包成 build/Snap-0.1.0.dmg
 ## 开发
 
 ```
-Sources/SnapCore/   纯逻辑，有单元测试：Vision 坐标换算、段落合并、取色、翻译接口与缓存、长截图拼接、贴图文字选择
-Sources/Snap/       应用：截图覆盖层、标注、工具栏、文字识别、译文排版、导出、贴图、设置
+Sources/ShotlateCore/   纯逻辑，有单元测试：Vision 坐标换算、段落合并、取色、翻译接口与缓存、长截图拼接、贴图文字选择
+Sources/Shotlate/       应用：截图覆盖层、标注、工具栏、文字识别、译文排版、导出、贴图、设置
 ```
 
-直接运行 `.build/debug/Snap`（未打包）时不读写保存的 Key，翻译用的 Key 取自环境变量 `DEEPSEEK_API_KEY`，脚本运行不会碰到真实配置。
+直接运行 `.build/debug/Shotlate`（未打包）时不读写保存的 Key，翻译用的 Key 取自环境变量 `DEEPSEEK_API_KEY`，脚本运行不会碰到真实配置。
 
 不打开截图界面也能检查文字识别和翻译排版：
 
 ```bash
-DEEPSEEK_API_KEY=sk-… .build/debug/Snap --translate-image input.png output.png --scale 2
+DEEPSEEK_API_KEY=sk-… .build/debug/Shotlate --translate-image input.png output.png --scale 2
 ```
 
 不设置 Key 时会用占位译文，只检查排版效果。
@@ -138,20 +141,20 @@ DEEPSEEK_API_KEY=sk-… .build/debug/Snap --translate-image input.png output.png
 不打开真实的截图界面也能检查交互：下面的命令会离屏创建截图视图，用模拟的鼠标和键盘事件走一遍选区、标注、编辑、撤销、翻译等步骤，每一步输出一张 PNG。
 
 ```bash
-.build/debug/Snap --ui-demo background.png out/
+.build/debug/Shotlate --ui-demo background.png out/
 ```
 
 需要 AppKit 的功能（贴图窗口、剪贴板、渲染）有一组脚本化的自检，逐条输出 PASS / FAIL，有失败时退出码非零：
 
 ```bash
-.build/debug/Snap --check all          # 或者只跑一项，例如 --check pins-hide
+.build/debug/Shotlate --check all          # 或者只跑一项，例如 --check pins-hide
 ```
 
 长截图的端到端测试会在屏幕上打开一个带固定页眉的长列表窗口，自动滚动并截图拼接，最后导出结果。这个测试需要运行它的终端有屏幕录制权限。另一个命令用来诊断两帧为什么没有接上：
 
 ```bash
-.build/debug/Snap --scroll-demo long.png
-.build/debug/Snap --stitch-diagnose frame1.png frame2.png
+.build/debug/Shotlate --scroll-demo long.png
+.build/debug/Shotlate --stitch-diagnose frame1.png frame2.png
 ```
 
 同一个可执行文件第一次调用 Vision 识别时，系统要编译一次识别模型，可能需要几十秒；之后就很快。应用启动时会在后台预热一次。

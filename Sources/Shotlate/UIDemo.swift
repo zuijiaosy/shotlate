@@ -3,7 +3,7 @@ import AppKit
 /// Drives the capture overlay offscreen with synthetic events and writes a PNG per step,
 /// so the interaction states can be reviewed without Screen Recording permission.
 ///
-///   Snap --ui-demo background.png output-directory
+///   Shotlate --ui-demo background.png output-directory
 enum UIDemo {
     @MainActor
     static func run(input: URL, outputDirectory: URL) async {
@@ -104,7 +104,7 @@ enum UIDemo {
         key("6", code: 22)
         click(CGPoint(x: 420, y: 320))
         if let editor = window.firstResponder as? NSTextView {
-            editor.insertText("Snap 标注\n第二行", replacementRange: NSRange(location: NSNotFound, length: 0))
+            editor.insertText("Shotlate 标注\n第二行", replacementRange: NSRange(location: NSNotFound, length: 0))
         }
         shot("text-editing")
         key("\u{1b}", code: 53) // commit text

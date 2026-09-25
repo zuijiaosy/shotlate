@@ -1,6 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
-import SnapCore
+import ShotlateCore
 
 /// A global keyboard shortcut in Carbon terms, plus the key label shown in the UI.
 struct Shortcut: Codable, Equatable {
@@ -66,7 +66,7 @@ enum ImageFormat: String, CaseIterable, Identifiable {
 /// App settings. Everything lives in UserDefaults except the API key, which has its own file (see `SecretFile`).
 final class Settings {
     static let shared = Settings()
-    static let didChange = Notification.Name("SnapSettingsDidChange")
+    static let didChange = Notification.Name("ShotlateSettingsDidChange")
 
     private let defaults = UserDefaults.standard
 
@@ -86,7 +86,7 @@ final class Settings {
     }
 
     /// In a file only the user can read, not the Keychain: a Keychain item asks for the login password again
-    /// whenever the app's signature changes, which is every rebuild. An unbundled dev build (`.build/debug/Snap`)
+    /// whenever the app's signature changes, which is every rebuild. An unbundled dev build (`.build/debug/Shotlate`)
     /// reads DEEPSEEK_API_KEY instead, so scripted runs never touch the real key.
     var apiKey: String {
         get {
@@ -156,10 +156,10 @@ final class Settings {
     }
 }
 
-/// Small secrets in `~/Library/Application Support/Snap`, readable and writable only by the user (0600).
+/// Small secrets in `~/Library/Application Support/Shotlate`, readable and writable only by the user (0600).
 enum SecretFile {
     static var directory: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Snap", isDirectory: true)
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Shotlate", isDirectory: true)
     }
 
     static func read(_ name: String) -> String? {

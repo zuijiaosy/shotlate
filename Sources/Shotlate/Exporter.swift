@@ -47,12 +47,12 @@ enum Exporter {
         pasteboard.writeObjects([item])
     }
 
-    /// `Snap 2026-09-25 15.30.00.png`
+    /// `Shotlate 2026-09-25 15.30.00.png`
     static func defaultFileName(format: ImageFormat, date: Date = Date()) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        return "Snap \(formatter.string(from: date)).\(format.fileExtension)"
+        return "Shotlate \(formatter.string(from: date)).\(format.fileExtension)"
     }
 
     /// Saves into the configured folder with a timestamped name and returns the file URL.
