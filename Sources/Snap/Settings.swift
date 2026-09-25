@@ -106,9 +106,17 @@ final class Settings {
         set { defaults.set(newValue, forKey: "translate.targetLanguage") }
     }
 
+    /// In the Keychain for the app. An unbundled dev build (`.build/debug/Snap`) reads DEEPSEEK_API_KEY instead:
+    /// its Keychain access would stop at a permission prompt, which hangs scripted runs.
     var apiKey: String {
-        get { Keychain.read(account: "deepseek-api-key") ?? "" }
-        set { Keychain.write(newValue, account: "deepseek-api-key") }
+        get {
+            guard Bundle.main.bundleIdentifier != nil else { return ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"] ?? "" }
+            return Keychain.read(account: "deepseek-api-key") ?? ""
+        }
+        set {
+            guard Bundle.main.bundleIdentifier != nil else { return }
+            Keychain.write(newValue, account: "deepseek-api-key")
+        }
     }
 
     var saveDirectory: URL {
