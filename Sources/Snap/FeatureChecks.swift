@@ -32,6 +32,7 @@ enum FeatureChecks {
         ("tool-colors", toolColors),
         ("item-styles", itemStyles),
         ("cursor", cursorCapture),
+        ("refresh", refreshCapture),
     ]
 
     @MainActor
@@ -754,5 +755,39 @@ enum FeatureChecks {
         }
         h.key("`", code: 50)
         expect(darkPixels(h.export()!) == 0, "` again takes it out")
+    }
+
+    @MainActor static func refreshCapture() async {
+        let first = CaptureHarness()
+        let history = CaptureHistory(directory: outputDirectory.appendingPathComponent("refresh-history", isDirectory: true))
+        let session = CaptureSession.makeForTesting(image: first.snapshot, size: first.size, history: history)
+        let view = session.testing_views[0]
+        view.window?.makeFirstResponder(view)
+        func mouse(_ type: NSEvent.EventType, _ p: CGPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: view.convert(p, to: nil), modifierFlags: [], timestamp: 0,
+                               windowNumber: view.window!.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 100, y: 100)))
+        view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 300, y: 200)))
+        view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 300, y: 200)))
+        view.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                            characters: "r", charactersIgnoringModifiers: "r", isARepeat: false, keyCode: 15)!)
+        view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 120, y: 120)))
+        view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 200, y: 180)))
+        view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 200, y: 180)))
+
+        // A "new" screen: solid green.
+        let green = sampleRep(first.size, color: .systemGreen).cgImage!
+        session.refresh(from: view) { [0: green] }
+        for _ in 0..<50 where session.testing_views[0] === view { try? await Task.sleep(for: .milliseconds(20)) }
+        let refreshed = session.testing_views[0]
+        expect(refreshed !== view && refreshed.snapshotImage === green, "F5 swaps in the new screenshot")
+        expect(refreshed.testing_selection == CGRect(x: 100, y: 100, width: 200, height: 100) && refreshed.testing_items.count == 1,
+               "selection and annotations are kept")
+        if let rep = refreshed.exportImage(format: .png, shadow: false), let c = rep.color(atPoint: CGPoint(x: 150, y: 50)) {
+            expect(c.greenComponent > 0.6 && c.redComponent < 0.5, "the export uses the new pixels")
+        }
+        expect(refreshed.historyEntry() != nil, "a refreshed capture is recorded again when output")
+        session.finish()
     }
 }

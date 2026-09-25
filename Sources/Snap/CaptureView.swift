@@ -200,8 +200,9 @@ final class CaptureView: NSView {
     }
 
     /// Shows a past capture: its selection and editable annotations.
-    func restore(_ entry: HistoryEntry) {
-        replayedEntry = entry
+    /// `asReplay` false is for a refreshed screenshot, which should be recorded again when output.
+    func restore(_ entry: HistoryEntry, asReplay: Bool = true) {
+        replayedEntry = asReplay ? entry : nil
         selection = entry.selection.intersection(bounds)
         items = entry.items
         undoStack = []
@@ -221,6 +222,13 @@ final class CaptureView: NSView {
     }
 
     var testing_showsCursor: Bool { showsCursor }
+
+    /// Selection and annotations as they are now, to carry over to a refreshed screenshot.
+    func currentState() -> HistoryEntry? {
+        guard hasSelection else { return nil }
+        commitText()
+        return HistoryEntry(displayID: displayID, screenSize: bounds.size, selection: selection, items: items)
+    }
 
     func showMessage(_ text: String, duration: TimeInterval = 2.5) {
         showToast(text, duration: duration)
@@ -1222,6 +1230,12 @@ final class CaptureView: NSView {
             return
         }
 
+        if code == 96 || (flags == .command && key == "r") {
+            finishPolyline()
+            commitText()
+            session?.refresh(from: self)
+            return
+        }
         if flags.isEmpty, key == "`" {
             toggleCursor()
             return

@@ -227,7 +227,40 @@ final class CaptureSession {
         views[index].showMessage("截图历史 \(target + 1)/\(entries.count) · \(formatter.string(from: entry.date))\n, 更早 · . 更新", duration: 3)
     }
 
-    private func replaceView(at index: Int, snapshot: CGImage, rects: [CGRect], entry: HistoryEntry?) {
+    // MARK: Refresh
+
+    /// Grabs `view`'s screen again (Snap's own windows are left out of captures, so the overlay can stay up),
+    /// keeping the selection and annotations. `capture` is replaceable for tests.
+    func refresh(from view: CaptureView, capture: @escaping () async throws -> [CGDirectDisplayID: CGImage] = CaptureSession.captureByDisplay) {
+        guard let index = views.firstIndex(where: { $0 === view }) else { return }
+        guard historyScreen != index else {
+            view.showMessage("正在回看历史截图，按 . 回到当前屏幕后再刷新")
+            return
+        }
+        let state = view.currentState()
+        Task { @MainActor in
+            do {
+                let images = try await capture()
+                guard index < self.views.count, self.views[index] === view, let image = images[view.displayID] else { return }
+                self.liveSnapshots[index] = image
+                self.replaceView(at: index, snapshot: image, rects: self.liveWindowRects[index], entry: state, asReplay: false)
+                self.views[index].showMessage("已刷新截图", duration: 1)
+            } catch {
+                view.showMessage("刷新失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    static func captureByDisplay() async throws -> [CGDirectDisplayID: CGImage] {
+        var result: [CGDirectDisplayID: CGImage] = [:]
+        for snapshot in try await CaptureEngine.captureScreens() {
+            let id = (snapshot.screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+            result[id] = snapshot.image
+        }
+        return result
+    }
+
+    private func replaceView(at index: Int, snapshot: CGImage, rects: [CGRect], entry: HistoryEntry?, asReplay: Bool = true) {
         let old = views[index]
         old.tearDown()
         if owner === old { owner = nil }
@@ -240,7 +273,7 @@ final class CaptureSession {
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
         if let entry {
-            view.restore(entry)
+            view.restore(entry, asReplay: asReplay)
         } else {
             view.primeCursor()
         }
