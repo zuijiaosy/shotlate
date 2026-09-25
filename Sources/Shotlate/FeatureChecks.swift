@@ -469,16 +469,33 @@ enum FeatureChecks {
         expect(center.registeredCount == 0, "a cleared shortcut is released")
         center.unregisterAll()
 
-        // The settings window, rendered offscreen for a look (without reading the API key).
+        // Settings take effect as they change; there is no save button.
         let model = SettingsModel(loadSecrets: false)
-        let hosting = NSHostingView(rootView: SettingsView(model: model))
-        hosting.frame = CGRect(x: 0, y: 0, width: 480, height: 900)
-        let window = NSWindow(contentRect: CGRect(x: -8000, y: -8000, width: 480, height: 900), styleMask: .borderless, backing: .buffered, defer: false)
-        window.contentView = hosting
-        hosting.layoutSubtreeIfNeeded()
-        if let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) {
-            hosting.cacheDisplay(in: hosting.bounds, to: rep)
-            write(rep, "settings.png")
+        var notified = 0
+        let token = NotificationCenter.default.addObserver(forName: Settings.didChange, object: nil, queue: nil) { _ in notified += 1 }
+        defer { NotificationCenter.default.removeObserver(token) }
+        model.imageFormat = .jpeg
+        expect(Settings.shared.imageFormat == .jpeg, "changing the format saves it at once")
+        model.imageFormat = .png
+        model.targetLanguage = "English"
+        expect(Settings.shared.targetLanguage == "English", "so does the target language")
+        model.targetLanguage = "简体中文"
+        model.scanCodeShortcut = shortcut
+        expect(Settings.shared.scanCodeShortcut == shortcut && notified == 1, "a new global shortcut is saved and re-registered")
+        model.scanCodeShortcut = nil
+        center.unregisterAll()
+
+        // Every pane, rendered offscreen for a look (without reading the API key).
+        for pane in SettingsPane.allCases {
+            let hosting = NSHostingView(rootView: SettingsView(model: model, pane: pane))
+            hosting.frame = CGRect(x: 0, y: 0, width: 680, height: 460)
+            let window = NSWindow(contentRect: CGRect(x: -8000, y: -8000, width: 680, height: 460), styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = hosting
+            hosting.layoutSubtreeIfNeeded()
+            if let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) {
+                hosting.cacheDisplay(in: hosting.bounds, to: rep)
+                write(rep, "settings-\(pane.rawValue).png")
+            }
         }
     }
 

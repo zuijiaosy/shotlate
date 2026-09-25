@@ -128,6 +128,10 @@ enum UIDemo {
         shot("redo-once")
 
         func pump(_ seconds: TimeInterval) async { try? await Task.sleep(for: .seconds(seconds)) }
+        key("x", code: 7) // OCR
+        for _ in 0..<200 where view.testing_ocrText == nil { await pump(0.25) }
+        shot("ocr-panel")
+        key("\u{1b}", code: 53) // close the OCR panel
         Settings.shared.apiKey.isEmpty ? key("y", code: 16) : ()
         await pump(0.1)
         shot("translate-without-key")
