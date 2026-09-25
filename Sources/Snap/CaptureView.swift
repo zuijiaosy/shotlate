@@ -643,7 +643,7 @@ final class CaptureView: NSView {
         guard abs(scrollAccumulator) >= 1 else { return }
         let steps = scrollAccumulator.rounded(.towardZero)
         scrollAccumulator -= steps
-        let unit: CGFloat = tool == .mosaic || tool == .text || tool == .number ? 2 : 1
+        let unit: CGFloat = tool == .mosaic || tool == .highlighter || tool == .text || tool == .number ? 2 : 1
         let current = currentStyle?.size ?? tool.defaultSize
         applyStyle(.size(current + steps * unit), coalesce: true)
     }
@@ -718,6 +718,9 @@ final class CaptureView: NSView {
         case .pen:
             draft = AnnotationItem(shape: .pen([p]), color: color, size: size)
             drag = .drawing(p)
+        case .highlighter:
+            draft = AnnotationItem(shape: .highlighter([p]), color: color, size: size)
+            drag = .drawing(p)
         case .mosaic:
             if StyleMemory.mosaicMode == .brush {
                 let item = AnnotationItem(shape: .mosaicBrush([p]), color: color, size: size, effect: StyleMemory.mosaicEffect)
@@ -750,6 +753,16 @@ final class CaptureView: NSView {
                 points.append(p)
             }
             item.shape = .pen(points)
+        case var .highlighter(points):
+            if shift, let first = points.first {
+                // Like a ruler: horizontal, vertical or 45°.
+                let angle = (atan2(p.y - first.y, p.x - first.x) / (.pi / 4)).rounded() * (.pi / 4)
+                let length = hypot(p.x - first.x, p.y - first.y)
+                points = [first, CGPoint(x: first.x + cos(angle) * length, y: first.y + sin(angle) * length)]
+            } else if let last = points.last, hypot(p.x - last.x, p.y - last.y) >= 1 {
+                points.append(p)
+            }
+            item.shape = .highlighter(points)
         case var .mosaicBrush(points):
             if let last = points.last, hypot(p.x - last.x, p.y - last.y) >= 1 { points.append(p) }
             item.shape = .mosaicBrush(points)

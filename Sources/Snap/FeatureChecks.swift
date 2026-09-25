@@ -18,6 +18,7 @@ enum FeatureChecks {
         ("pin-keys", pinKeys),
         ("pin-clipboard", pinClipboard),
         ("countdown", countdown),
+        ("highlighter", highlighter),
     ]
 
     @MainActor
@@ -171,5 +172,43 @@ enum FeatureChecks {
         countdown.cancel()
         try? await Task.sleep(for: .milliseconds(1300))
         expect(!fired, "cancel prevents firing")
+    }
+
+    @MainActor static func highlighter() async {
+        let h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 600, height: 360))
+        h.key("h", code: 4)
+        StyleMemory.color = StyleState.palette[2] // yellow
+        // Across the first text line, then a straight ⇧ stroke that ends off-axis and should snap to horizontal.
+        h.drag(CGPoint(x: 80, y: 88), CGPoint(x: 400, y: 90))
+        h.drag(CGPoint(x: 80, y: 150), CGPoint(x: 400, y: 158), flags: .shift)
+        // A red rectangle first, then a marker across it: the rectangle must survive under the marker.
+        h.key("r", code: 15)
+        StyleMemory.color = StyleState.palette[0]
+        h.drag(CGPoint(x: 450, y: 180), CGPoint(x: 520, y: 240))
+        h.key("h", code: 4)
+        StyleMemory.color = StyleState.palette[2]
+        h.drag(CGPoint(x: 420, y: 180), CGPoint(x: 560, y: 180))
+        guard let rep = h.export() else { return expect(false, "export") }
+        write(rep, "highlighter.png")
+        // Export is relative to the selection origin (40, 40).
+        func out(_ x: CGFloat, _ y: CGFloat) -> NSColor? { rep.color(atPoint: CGPoint(x: x - 40, y: y - 40)) }
+        let white = out(560, 130)!, marked = out(300, 90)!
+        expect(white.blueComponent > 0.95, "outside the stroke stays white")
+        expect(marked.blueComponent < 0.6 && marked.redComponent > 0.85 && marked.greenComponent > 0.7, "white paper under the stroke turns yellow (\(marked))")
+        let straight = out(380, 150)!, offLine = out(380, 158 + 12)!
+        expect(straight.blueComponent < 0.6, "⇧ stroke stays on the starting row")
+        expect(offLine.blueComponent > 0.9, "⇧ stroke does not follow the mouse off the row")
+        // Multiply keeps dark pixels dark: the glyph ink must not turn yellow-bright.
+        let darkBand = out(300, 330)!
+        expect(darkBand.redComponent < 0.3, "dark background stays dark under a marker (multiply)")
+        let underMarker = out(485, 180)!
+        expect(underMarker.redComponent > 0.8 && underMarker.greenComponent < 0.4, "an annotation under the marker is kept (\(underMarker))")
+        if let screen = h.screenshot() {
+            write(screen, "highlighter-overlay.png")
+            let onScreen = screen.color(atPoint: CGPoint(x: 485, y: 180))!, exported = underMarker
+            expect(abs(onScreen.redComponent - exported.redComponent) < 0.08 && abs(onScreen.greenComponent - exported.greenComponent) < 0.08,
+                   "on-screen overlay matches the export (\(onScreen) vs \(exported))")
+        }
     }
 }

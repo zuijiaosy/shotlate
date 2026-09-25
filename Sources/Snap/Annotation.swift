@@ -1,7 +1,7 @@
 import AppKit
 
 enum Tool: String, CaseIterable {
-    case rectangle, ellipse, line, arrow, pen, mosaic, text, number
+    case rectangle, ellipse, line, arrow, pen, highlighter, mosaic, text, number
 
     var title: String {
         switch self {
@@ -10,6 +10,7 @@ enum Tool: String, CaseIterable {
         case .line: return "直线"
         case .arrow: return "箭头"
         case .pen: return "画笔"
+        case .highlighter: return "记号笔"
         case .mosaic: return "马赛克"
         case .text: return "文字"
         case .number: return "序号"
@@ -23,6 +24,7 @@ enum Tool: String, CaseIterable {
         case .line: return "line.diagonal"
         case .arrow: return "arrow.up.right"
         case .pen: return "scribble"
+        case .highlighter: return "highlighter"
         case .mosaic: return "checkerboard.rectangle"
         case .text: return "textformat"
         case .number: return "1.circle"
@@ -37,6 +39,7 @@ enum Tool: String, CaseIterable {
         case .line: return "l"
         case .arrow: return "a"
         case .pen: return "p"
+        case .highlighter: return "h"
         case .mosaic: return "m"
         case .text: return "t"
         case .number: return "n"
@@ -47,6 +50,7 @@ enum Tool: String, CaseIterable {
     var sizeRange: ClosedRange<CGFloat> {
         switch self {
         case .mosaic: return 6...120
+        case .highlighter: return 6...60
         case .text: return 10...120
         case .number: return 14...80
         default: return 1...40
@@ -56,6 +60,7 @@ enum Tool: String, CaseIterable {
     var sizePresets: [CGFloat] {
         switch self {
         case .mosaic: return [12, 24, 48]
+        case .highlighter: return [12, 20, 32]
         case .text: return [14, 20, 32]
         case .number: return [20, 26, 36]
         default: return [2, 4, 8]
@@ -65,7 +70,7 @@ enum Tool: String, CaseIterable {
     var defaultSize: CGFloat { sizePresets[1] }
 
     /// Freehand tools always draw, even when the stroke starts on an existing annotation.
-    var isFreehand: Bool { self == .pen || self == .mosaic }
+    var isFreehand: Bool { self == .pen || self == .highlighter || self == .mosaic }
 }
 
 enum MosaicMode: String { case brush, rect }
@@ -77,6 +82,8 @@ enum Shape: Equatable {
     case line(CGPoint, CGPoint)
     case arrow(CGPoint, CGPoint)
     case pen([CGPoint])
+    /// A translucent marker stroke, blended so text underneath stays readable.
+    case highlighter([CGPoint])
     case mosaicRect(CGRect)
     case mosaicBrush([CGPoint])
     /// Text origin is the top-left of the first line; lines wrap at `width`.
@@ -98,6 +105,7 @@ struct AnnotationItem: Equatable {
         case .line: return .line
         case .arrow: return .arrow
         case .pen: return .pen
+        case .highlighter: return .highlighter
         case .mosaicRect, .mosaicBrush: return .mosaic
         case .text: return .text
         case .number: return .number
@@ -194,7 +202,7 @@ extension AnnotationItem {
         case let .arrow(a, b):
             let head = Self.arrowHeadWidth(size) / 2
             return CGRect(corners: a, b).insetBy(dx: -head, dy: -head)
-        case let .pen(points), let .mosaicBrush(points):
+        case let .pen(points), let .highlighter(points), let .mosaicBrush(points):
             return points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -pad, dy: -pad)
         case let .text(text, origin, width):
             return CGRect(origin: origin, size: Self.textSize(text, size: size, width: width))
@@ -223,7 +231,7 @@ extension AnnotationItem {
             return distance(p, a, b) <= tolerance
         case let .arrow(a, b):
             return distance(p, a, b) <= max(tolerance, Self.arrowHeadWidth(size) / 2)
-        case let .pen(points), let .mosaicBrush(points):
+        case let .pen(points), let .highlighter(points), let .mosaicBrush(points):
             if points.count == 1 { return hypot(p.x - points[0].x, p.y - points[0].y) <= tolerance }
             return zip(points, points.dropFirst()).contains { distance(p, $0, $1) <= tolerance }
         case .text:
@@ -254,6 +262,7 @@ extension AnnotationItem {
         case let .line(a, b): copy.shape = .line(m(a), m(b))
         case let .arrow(a, b): copy.shape = .arrow(m(a), m(b))
         case let .pen(points): copy.shape = .pen(points.map(m))
+        case let .highlighter(points): copy.shape = .highlighter(points.map(m))
         case let .mosaicBrush(points): copy.shape = .mosaicBrush(points.map(m))
         case let .text(text, origin, width): copy.shape = .text(text, m(origin), width: width)
         case let .number(c): copy.shape = .number(m(c))
@@ -280,7 +289,7 @@ extension AnnotationItem {
         switch shape {
         case let .rectangle(r), let .ellipse(r), let .mosaicRect(r): return r.width >= 3 && r.height >= 3
         case let .line(a, b), let .arrow(a, b): return hypot(a.x - b.x, a.y - b.y) >= 3
-        case let .pen(points): return points.count >= 2
+        case let .pen(points), let .highlighter(points): return points.count >= 2
         case let .mosaicBrush(points): return !points.isEmpty
         case let .text(text, _, _): return !text.isEmpty
         case .number: return true
@@ -327,7 +336,7 @@ struct ContentRenderer {
 
     func draw(items: [AnnotationItem], translation: [TranslatedBlock]) {
         drawBase()
-        drawOverlays(items: items, draft: nil, hiddenID: nil, translation: translation)
+        drawOverlays(items: items, draft: nil, hiddenID: nil, translation: translation, baseDrawn: true)
     }
 
     func drawBase() {
@@ -335,7 +344,15 @@ struct ContentRenderer {
     }
 
     /// Translations go first so annotations stay on top of them.
-    func drawOverlays(items: [AnnotationItem], draft: AnnotationItem?, hiddenID: UUID?, translation: [TranslatedBlock]) {
+    ///
+    /// On screen the overlay is a transparent layer above the screenshot. A highlighter multiplies with what is
+    /// under it, so when one is present the screenshot is painted into the overlay first (`baseDrawn` false);
+    /// the screen then matches the export, which always starts from the screenshot.
+    func drawOverlays(items: [AnnotationItem], draft: AnnotationItem?, hiddenID: UUID?, translation: [TranslatedBlock],
+                      baseDrawn: Bool = false) {
+        if !baseDrawn, (items + [draft].compactMap { $0 }).contains(where: { $0.tool == .highlighter }) {
+            drawBase()
+        }
         for block in translation { Self.draw(block) }
         var number = 0
         for item in items {
@@ -397,6 +414,13 @@ struct ContentRenderer {
                 cg.fillPath()
             }
         case let .pen(points):
+            cg.addPath(Self.smoothPath(points))
+            cg.strokePath()
+        case let .highlighter(points):
+            // One path stroked once, so overlapping parts of the stroke don't get darker.
+            cg.setBlendMode(.multiply)
+            cg.setAlpha(0.55)
+            cg.setLineCap(.butt)
             cg.addPath(Self.smoothPath(points))
             cg.strokePath()
         case let .mosaicRect(r):
