@@ -10,21 +10,119 @@ final class PinManager {
     private var history: [(rep: NSBitmapImageRep, frame: CGRect)] = []
     /// Hidden pins stay open and don't count as closed, so they are not pushed into the restore history.
     private(set) var isHidingAll = false
+    /// While set, only this pin is shown.
+    private(set) weak var soloPin: PinWindow?
+
+    /// Named sets of pins; only the current group's pins are on screen. Names persist across launches.
+    private(set) var groups: [String] {
+        get { UserDefaults.standard.stringArray(forKey: "pin.groups").flatMap { $0.isEmpty ? nil : $0 } ?? [Self.defaultGroup] }
+        set { UserDefaults.standard.set(newValue, forKey: "pin.groups") }
+    }
+    private(set) var currentGroup = PinManager.defaultGroup
+    static let defaultGroup = "默认"
 
     var hasHistory: Bool { !history.isEmpty }
     var hasPins: Bool { !pins.isEmpty }
     var hasPassthrough: Bool { pins.contains { $0.ignoresMouseEvents } }
 
-    /// Shows `rep` as a floating pin; `frame` is in global screen coordinates at 100% zoom.
+    /// Shows `rep` as a floating pin in the current group; `frame` is in global screen coordinates at 100% zoom.
     @discardableResult
     func pin(_ rep: NSBitmapImageRep, frame: CGRect) -> PinWindow {
-        // A new pin while the others are hidden brings them back, so nothing is left hidden by surprise.
-        if isHidingAll { showAll() }
+        // A new pin while the others are hidden (or soloed) brings them back, so nothing is left hidden by surprise.
+        isHidingAll = false
+        soloPin = nil
+        if !groups.contains(currentGroup) { currentGroup = groups[0] }
         let window = PinWindow(rep: rep, frame: frame)
+        window.group = currentGroup
         pins.append(window)
+        refreshVisibility()
         window.orderFrontRegardless()
         window.makeKey()
         return window
+    }
+
+    /// Whether `pin` should be on screen given hide-all, the current group and solo.
+    func isShown(_ pin: PinWindow) -> Bool {
+        guard !isHidingAll, pin.group == currentGroup else { return false }
+        return soloPin == nil || soloPin === pin
+    }
+
+    /// Brings windows in line with `isShown`, only touching the ones that change so the stacking order is kept.
+    private func refreshVisibility() {
+        for pin in pins {
+            let shown = isShown(pin)
+            if shown, !pin.isVisible { pin.orderFrontRegardless() }
+            if !shown, pin.isVisible { pin.orderOut(nil) }
+        }
+    }
+
+    // MARK: Groups
+
+    var pinsInCurrentGroup: [PinWindow] { pins.filter { $0.group == currentGroup } }
+
+    func count(in group: String) -> Int { pins.filter { $0.group == group }.count }
+
+    func switchGroup(to name: String) {
+        guard groups.contains(name) else { return }
+        currentGroup = name
+        isHidingAll = false
+        soloPin = nil
+        refreshVisibility()
+        HUD.show("贴图分组：\(name)（\(count(in: name)) 张）")
+    }
+
+    /// Cycles to the next group.
+    func switchToNextGroup() {
+        let list = groups
+        guard let i = list.firstIndex(of: currentGroup) else { return switchGroup(to: list[0]) }
+        switchGroup(to: list[(i + 1) % list.count])
+    }
+
+    /// Adds a group (a unique name is made if taken) and switches to it.
+    @discardableResult
+    func createGroup(_ name: String) -> String {
+        var unique = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if unique.isEmpty { unique = "分组 \(groups.count + 1)" }
+        let base = unique
+        var n = 2
+        while groups.contains(unique) {
+            unique = "\(base) \(n)"
+            n += 1
+        }
+        groups.append(unique)
+        switchGroup(to: unique)
+        return unique
+    }
+
+    func renameGroup(_ old: String, to new: String) {
+        let name = new.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !groups.contains(name), let i = groups.firstIndex(of: old) else { return }
+        groups[i] = name
+        for pin in pins where pin.group == old { pin.group = name }
+        if currentGroup == old { currentGroup = name }
+    }
+
+    /// Removes a group and closes its pins (they can still be restored). The last group can't be deleted.
+    func deleteGroup(_ name: String) {
+        guard groups.count > 1, let i = groups.firstIndex(of: name) else { return }
+        for pin in pins where pin.group == name { pin.close(keepInHistory: true) }
+        groups.remove(at: i)
+        if currentGroup == name { switchGroup(to: groups[max(0, i - 1)]) }
+    }
+
+    func move(_ pin: PinWindow, to group: String) {
+        guard groups.contains(group) else { return }
+        pin.group = group
+        if soloPin === pin { soloPin = nil }
+        refreshVisibility()
+    }
+
+    // MARK: Solo
+
+    func toggleSolo(_ pin: PinWindow) {
+        soloPin = soloPin === pin ? nil : pin
+        refreshVisibility()
+        if soloPin != nil { HUD.show("只显示这张贴图，再选一次「Solo」恢复其他贴图") }
     }
 
     /// Pins what is on the clipboard (images, image files, colors, rich or plain text), centered on the mouse.
@@ -74,26 +172,24 @@ final class PinManager {
     func closeAll() {
         for pin in pins { pin.close(keepInHistory: true) }
         isHidingAll = false
+        soloPin = nil
     }
 
     /// Hides every pin, or shows them again if they are hidden.
     func toggleHidden() {
         if isHidingAll {
-            showAll()
+            isHidingAll = false
+            refreshVisibility()
         } else {
-            guard hasPins else {
+            let shown = pins.filter(isShown)
+            guard !shown.isEmpty else {
                 HUD.show("当前没有贴图")
                 return
             }
-            for pin in pins { pin.orderOut(nil) }
             isHidingAll = true
-            HUD.show("已隐藏 \(pins.count) 张贴图，再按一次显示")
+            refreshVisibility()
+            HUD.show("已隐藏 \(shown.count) 张贴图，再按一次显示")
         }
-    }
-
-    private func showAll() {
-        isHidingAll = false
-        for pin in pins { pin.orderFrontRegardless() }
     }
 
     func disablePassthrough() {
@@ -102,6 +198,10 @@ final class PinManager {
 
     fileprivate func didClose(_ pin: PinWindow, keepInHistory: Bool) {
         pins.removeAll { $0 === pin }
+        if soloPin === pin || soloPin == nil {
+            soloPin = nil
+            refreshVisibility()
+        }
         guard keepInHistory else { return }
         history.append((pin.rep, pin.frameAtFullSize))
         if history.count > Self.historyLimit { history.removeFirst() }
@@ -113,6 +213,7 @@ final class PinWindow: NSPanel {
     private(set) var rep: NSBitmapImageRep
     /// The text this pin was rendered from, if any, for "copy text".
     var sourceText: String?
+    var group = PinManager.defaultGroup
     private var baseSize: CGSize
     private(set) var zoom: CGFloat = 1
     private let pinView = PinView()
@@ -333,6 +434,13 @@ final class PinWindow: NSPanel {
 
     @objc func closeFromMenu() { close(keepInHistory: true) }
 
+    @objc func toggleSolo() { PinManager.shared.toggleSolo(self) }
+
+    @objc func moveToGroup(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        PinManager.shared.move(self, to: name)
+    }
+
     @objc func toggleThumbnail() {
         if thumbnail != nil {
             exitThumbnail()
@@ -443,6 +551,23 @@ final class PinWindow: NSPanel {
         let passthrough = item("鼠标穿透", #selector(togglePassthrough))
         passthrough.state = ignoresMouseEvents ? .on : .off
         menu.addItem(passthrough)
+        let solo = item("Solo：只显示这张", #selector(toggleSolo))
+        solo.state = PinManager.shared.soloPin === self ? .on : .off
+        menu.addItem(solo)
+        let groups = PinManager.shared.groups
+        if groups.count > 1 {
+            let moveItem = NSMenuItem(title: "移到分组", action: nil, keyEquivalent: "")
+            let moveMenu = NSMenu()
+            for name in groups {
+                let i = NSMenuItem(title: name, action: #selector(moveToGroup(_:)), keyEquivalent: "")
+                i.target = self
+                i.representedObject = name
+                i.state = name == group ? .on : .off
+                moveMenu.addItem(i)
+            }
+            moveItem.submenu = moveMenu
+            menu.addItem(moveItem)
+        }
         let floating = item("始终置顶", #selector(toggleFloating))
         floating.state = level == .floating ? .on : .off
         menu.addItem(floating)

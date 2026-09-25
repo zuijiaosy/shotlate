@@ -25,6 +25,7 @@ enum FeatureChecks {
         ("auto-save", autoSave),
         ("history", history),
         ("pin-thumbnail", pinThumbnail),
+        ("pin-groups", pinGroups),
     ]
 
     @MainActor
@@ -484,5 +485,51 @@ enum FeatureChecks {
         pin.setZoom(1)
         expect(pin.thumbnail == nil && pin.frame.size == original.size, "zooming leaves thumbnail mode")
         PinManager.shared.closeAll()
+    }
+
+    @MainActor static func pinGroups() async {
+        let m = PinManager.shared
+        let savedGroups = UserDefaults.standard.stringArray(forKey: "pin.groups")
+        defer { UserDefaults.standard.set(savedGroups, forKey: "pin.groups") }
+        UserDefaults.standard.removeObject(forKey: "pin.groups")
+        m.switchGroup(to: PinManager.defaultGroup)
+        func frame(_ i: Int) -> CGRect { CGRect(x: -4000 + i * 150, y: -4000, width: 120, height: 80) }
+        let a1 = m.pin(sampleRep(), frame: frame(0)), a2 = m.pin(sampleRep(), frame: frame(1))
+        expect(m.groups == [PinManager.defaultGroup] && a1.group == PinManager.defaultGroup, "pins start in the default group")
+
+        let b = m.createGroup("项目 B")
+        expect(m.currentGroup == b && !a1.isVisible && !a2.isVisible, "creating a group switches to it and hides the others")
+        let b1 = m.pin(sampleRep(), frame: frame(2))
+        expect(b1.group == b && b1.isVisible, "new pins go into the current group")
+        expect(m.createGroup("项目 B") == "项目 B 2", "duplicate names get a number")
+
+        m.switchGroup(to: PinManager.defaultGroup)
+        expect(a1.isVisible && a2.isVisible && !b1.isVisible, "switching back shows that group's pins only")
+
+        m.toggleSolo(a1)
+        expect(a1.isVisible && !a2.isVisible, "solo shows only that pin")
+        m.toggleSolo(a1)
+        expect(a1.isVisible && a2.isVisible, "solo off shows the group again")
+        m.toggleSolo(a2)
+        a2.close(keepInHistory: true)
+        expect(a1.isVisible && m.soloPin == nil, "closing the solo pin brings the others back")
+
+        m.toggleHidden()
+        expect(!a1.isVisible, "hide all hides the current group")
+        m.toggleHidden()
+        expect(a1.isVisible && !b1.isVisible, "show all only shows the current group")
+
+        m.move(a1, to: b)
+        expect(!a1.isVisible && a1.group == b, "moving a pin to another group hides it here")
+        m.renameGroup(b, to: "客户")
+        expect(m.groups.contains("客户") && a1.group == "客户" && b1.group == "客户", "renaming keeps the pins in the group")
+        expect(UserDefaults.standard.stringArray(forKey: "pin.groups")?.contains("客户") == true, "group names are saved")
+        m.switchGroup(to: "客户")
+        m.deleteGroup("客户")
+        expect(!m.pins.contains { $0 === a1 || $0 === b1 } && !m.groups.contains("客户"), "deleting a group closes its pins")
+        m.deleteGroup(PinManager.defaultGroup)
+        m.deleteGroup("项目 B 2")
+        expect(m.groups.count == 1, "the last group can't be deleted")
+        m.closeAll()
     }
 }

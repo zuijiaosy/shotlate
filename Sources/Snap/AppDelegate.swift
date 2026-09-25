@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var passthroughItem: NSMenuItem!
     private var cancelDelayItem: NSMenuItem!
     private var replayItem: NSMenuItem!
+    private var groupsItem: NSMenuItem!
     private let countdown = Countdown()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -48,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(closePinsItem)
         passthroughItem = item("取消贴图的鼠标穿透", #selector(disablePassthrough))
         menu.addItem(passthroughItem)
+        groupsItem = NSMenuItem(title: "贴图分组", action: nil, keyEquivalent: "")
+        groupsItem.submenu = NSMenu()
+        menu.addItem(groupsItem)
         menu.addItem(.separator())
         menu.addItem(item("设置…", #selector(openSettings), ","))
         menu.addItem(.separator())
@@ -103,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         passthroughItem.isHidden = !pins.hasPassthrough
         cancelDelayItem.isHidden = !countdown.isRunning
         replayItem.isEnabled = !CaptureHistory.shared.entries.isEmpty
+        rebuildGroupsMenu()
     }
 
     @objc private func capture() {
@@ -125,6 +130,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.resetStatusButton()
             CaptureSession.begin()
         })
+    }
+
+    private func rebuildGroupsMenu() {
+        let pins = PinManager.shared
+        groupsItem.title = "贴图分组：\(pins.currentGroup)"
+        let menu = groupsItem.submenu!
+        menu.removeAllItems()
+        for name in pins.groups {
+            let i = item("\(name)（\(pins.count(in: name))）", #selector(switchGroup(_:)))
+            i.representedObject = name
+            i.state = name == pins.currentGroup ? .on : .off
+            menu.addItem(i)
+        }
+        menu.addItem(.separator())
+        menu.addItem(item("新建分组…", #selector(newGroup)))
+        menu.addItem(item("重命名「\(pins.currentGroup)」…", #selector(renameGroup)))
+        let delete = item("删除「\(pins.currentGroup)」并关闭其中的贴图", #selector(deleteGroup))
+        delete.isEnabled = pins.groups.count > 1
+        menu.addItem(delete)
+    }
+
+    @objc private func switchGroup(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        PinManager.shared.switchGroup(to: name)
+    }
+
+    @objc private func newGroup() {
+        guard let name = askForName(title: "新建贴图分组", message: "新建后会切换到这个分组，之后的贴图都放在这里。", initial: "") else { return }
+        PinManager.shared.createGroup(name)
+    }
+
+    @objc private func renameGroup() {
+        let current = PinManager.shared.currentGroup
+        guard let name = askForName(title: "重命名贴图分组", message: "", initial: current) else { return }
+        PinManager.shared.renameGroup(current, to: name)
+    }
+
+    @objc private func deleteGroup() {
+        PinManager.shared.deleteGroup(PinManager.shared.currentGroup)
+    }
+
+    private func askForName(title: String, message: String, initial: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        let field = NSTextField(frame: CGRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = initial
+        alert.accessoryView = field
+        alert.addButton(withTitle: "好")
+        alert.addButton(withTitle: "取消")
+        alert.window.initialFirstResponder = field
+        NSApp.activate()
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
     }
 
     @objc private func replayHistory() {
