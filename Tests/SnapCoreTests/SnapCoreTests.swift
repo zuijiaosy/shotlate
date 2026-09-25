@@ -422,3 +422,39 @@ import Testing
             == CGRect(x: 10, y: 10, width: 225, height: 300))
     }
 }
+
+@Suite struct ElementHierarchyTests {
+    // window > toolbar > button; window > content; a same-size wrapper around the button.
+    let nodes = [
+        UIElementNode(rect: CGRect(x: 0, y: 0, width: 400, height: 300), parent: nil),     // 0 window content
+        UIElementNode(rect: CGRect(x: 0, y: 0, width: 400, height: 40), parent: 0),       // 1 toolbar
+        UIElementNode(rect: CGRect(x: 10, y: 5, width: 60, height: 30), parent: 1),       // 2 button wrapper
+        UIElementNode(rect: CGRect(x: 10, y: 5, width: 60, height: 30), parent: 2),       // 3 button (same frame)
+        UIElementNode(rect: CGRect(x: 0, y: 40, width: 400, height: 260), parent: 0),     // 4 content
+    ]
+    let window = CGRect(x: 0, y: 0, width: 400, height: 320)
+
+    @Test func innermostFirstThenAncestors() {
+        let chain = ElementHierarchy(nodes: nodes).chain(at: CGPoint(x: 20, y: 10), within: window)
+        #expect(chain == [nodes[3].rect, nodes[1].rect, nodes[0].rect, window])
+    }
+
+    @Test func pointOutsideElementsGivesWindowOnly() {
+        let chain = ElementHierarchy(nodes: nodes).chain(at: CGPoint(x: 200, y: 310), within: window)
+        #expect(chain == [window])
+    }
+
+    @Test func ignoresElementsOutsideTheFrontWindow() {
+        let hidden = nodes + [UIElementNode(rect: CGRect(x: 500, y: 0, width: 100, height: 100), parent: nil)]
+        let front = CGRect(x: 450, y: 0, width: 300, height: 300)
+        // The node at 500,0 is inside the front window; the others are not.
+        #expect(ElementHierarchy(nodes: hidden).chain(at: CGPoint(x: 520, y: 20), within: front) == [hidden[5].rect, front])
+        #expect(ElementHierarchy(nodes: nodes).chain(at: CGPoint(x: 20, y: 10), within: front) == [front])
+    }
+
+    @Test func survivesParentCycles() {
+        let cyclic = [UIElementNode(rect: CGRect(x: 0, y: 0, width: 10, height: 10), parent: 1),
+                      UIElementNode(rect: CGRect(x: 0, y: 0, width: 20, height: 20), parent: 0)]
+        #expect(ElementHierarchy(nodes: cyclic).chain(at: CGPoint(x: 5, y: 5), within: nil).count == 2)
+    }
+}

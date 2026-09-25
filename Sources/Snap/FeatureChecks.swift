@@ -37,6 +37,7 @@ enum FeatureChecks {
         ("scan-code", scanCode),
         ("share", shareFile),
         ("boards", boards),
+        ("elements", elements),
     ]
 
     @MainActor
@@ -892,5 +893,57 @@ enum FeatureChecks {
             expect(ink.redComponent > 0.8 && screen.greenComponent > 0.6 && screen.redComponent < 0.5, "the drawing is composited onto the live screen")
             write(rep, "transparent-board.png")
         }
+    }
+
+    @MainActor static func elements() async {
+        let window = CGRect(x: 40, y: 40, width: 640, height: 300)
+        let nodes = [
+            UIElementNode(rect: CGRect(x: 40, y: 60, width: 640, height: 280), parent: nil), // content
+            UIElementNode(rect: CGRect(x: 40, y: 60, width: 640, height: 50), parent: 0),   // toolbar
+            UIElementNode(rect: CGRect(x: 60, y: 70, width: 80, height: 30), parent: 1),    // button
+        ]
+        let h = CaptureHarness(windowRects: [window])
+        h.view.setElements(nodes)
+        h.view.mouseMoved(with: h.mouse(.mouseMoved, CGPoint(x: 90, y: 85)))
+        expect(h.view.testing_hoverRect == nodes[2].rect, "hover highlights the button under the pointer")
+        func wheel(_ lines: Int32) {
+            let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0)!
+            h.view.scrollWheel(with: NSEvent(cgEvent: event)!)
+        }
+        wheel(1)
+        expect(h.view.testing_hoverRect == nodes[1].rect, "wheel up selects the parent toolbar")
+        wheel(1)
+        expect(h.view.testing_hoverRect == nodes[0].rect, "again: the content area")
+        wheel(5)
+        expect(h.view.testing_hoverRect == window, "and finally the window, no further")
+        wheel(-2)
+        expect(h.view.testing_hoverRect == nodes[1].rect, "wheel down walks back in")
+        h.key("\t", code: 48)
+        h.view.mouseMoved(with: h.mouse(.mouseMoved, CGPoint(x: 91, y: 85)))
+        expect(h.view.testing_hoverRect == window, "Tab switches to whole windows")
+        h.key("\t", code: 48)
+        h.view.mouseMoved(with: h.mouse(.mouseMoved, CGPoint(x: 90, y: 85)))
+        h.click(CGPoint(x: 90, y: 85))
+        expect(h.view.testing_selection == nodes[2].rect, "a click selects the highlighted element")
+
+        // The real collector, reading a window of this process.
+        let win = NSWindow(contentRect: CGRect(x: 200, y: 200, width: 300, height: 120), styleMask: [.titled], backing: .buffered, defer: false)
+        win.isReleasedWhenClosed = false
+        let button = NSButton(title: "Snap 按钮", target: nil, action: nil)
+        button.frame = CGRect(x: 20, y: 40, width: 120, height: 32)
+        win.contentView?.addSubview(button)
+        win.orderFrontRegardless()
+        try? await Task.sleep(for: .milliseconds(200))
+        let collected = ElementCollector.collect(pids: [ProcessInfo.processInfo.processIdentifier], budget: 1)
+        let buttonOnScreen = win.convertToScreen(button.convert(button.bounds, to: nil))
+        let found = collected.contains { abs($0.rect.minX - buttonOnScreen.minX) < 2 && abs($0.rect.minY - buttonOnScreen.minY) < 2
+            && abs($0.rect.width - buttonOnScreen.width) < 2 }
+        if ElementCollector.isTrusted || !collected.isEmpty {
+            expect(found, "the collector finds a real button's frame (\(collected.count) elements, trusted: \(ElementCollector.isTrusted))")
+            expect(collected.contains { $0.parent != nil }, "and records parents")
+        } else {
+            print("SKIP  real collector: this process has no Accessibility permission")
+        }
+        win.orderOut(nil)
     }
 }

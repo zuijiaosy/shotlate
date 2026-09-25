@@ -1,4 +1,5 @@
 import AppKit
+import SnapCore
 
 /// Borderless full-screen window that can take keyboard focus.
 final class OverlayWindow: NSWindow {
@@ -75,6 +76,9 @@ final class CaptureSession {
         // Read window frames and the pointer before anything of ours appears on screen.
         let windowFrames = CaptureEngine.windowFrames()
         let pointer = CaptureEngine.pointer()
+        // Element frames are read in the background and arrive a moment after the overlay; until then windows are used.
+        let elements: Task<[UIElementNode], Never>? = Settings.shared.detectElements && ElementCollector.isTrusted
+            ? Task.detached(priority: .userInitiated) { ElementCollector.collect(pids: ElementCollector.frontApps()) } : nil
         Task { @MainActor in
             defer { isStarting = false }
             do {
@@ -84,6 +88,10 @@ final class CaptureSession {
                 current = session
                 session.show()
                 if replay, let view = session.activeView { session.stepHistory(1, from: view) }
+                if let elements {
+                    let nodes = await elements.value
+                    if !session.isFinished { session.deliver(elements: nodes) }
+                }
             } catch {
                 let alert = NSAlert()
                 alert.messageText = "截图失败"
@@ -269,6 +277,18 @@ final class CaptureSession {
         let formatter = DateFormatter()
         formatter.dateFormat = Calendar.current.isDateInToday(entry.date) ? "HH:mm:ss" : "M月d日 HH:mm"
         views[index].showMessage("截图历史 \(target + 1)/\(entries.count) · \(formatter.string(from: entry.date))\n, 更早 · . 更新", duration: 3)
+    }
+
+    /// Hands element frames (Cocoa global coordinates) to each screen's view, converted to its flipped local space.
+    func deliver(elements: [UIElementNode]) {
+        for (view, window) in zip(views, windows) where view.mode == .screenshot {
+            let frame = window.frame
+            let local = elements.map { node in
+                UIElementNode(rect: CGRect(x: node.rect.minX - frame.minX, y: frame.maxY - node.rect.maxY,
+                                           width: node.rect.width, height: node.rect.height), parent: node.parent)
+            }
+            view.setElements(local)
+        }
     }
 
     // MARK: Refresh

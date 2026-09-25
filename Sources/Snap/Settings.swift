@@ -153,6 +153,12 @@ final class Settings {
         defaults.set(shortcut.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: key)
     }
 
+    /// Highlight buttons, fields and panels under the pointer, not just whole windows (needs Accessibility permission).
+    var detectElements: Bool {
+        get { defaults.object(forKey: "capture.detectElements") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "capture.detectElements") }
+    }
+
     /// Whether a capture includes the mouse pointer by default (` toggles it while capturing).
     var captureCursor: Bool {
         get { defaults.bool(forKey: "capture.cursor") }

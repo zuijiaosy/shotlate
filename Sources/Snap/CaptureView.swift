@@ -291,6 +291,30 @@ final class CaptureView: NSView {
 
     private var toolbarHiddenByUser = false
 
+    // UI element detection: the chain of elements under the pointer (innermost first) and how far out the wheel has gone.
+    private var hierarchy: ElementHierarchy?
+    private var detectElements = Settings.shared.detectElements
+    private var elementChain: [CGRect] = []
+    private var elementLevel = 0
+
+    func setElements(_ nodes: [UIElementNode]) {
+        hierarchy = ElementHierarchy(nodes: nodes)
+        primeCursor()
+    }
+
+    var testing_hoverRect: CGRect? { hoverRect }
+
+    /// What to highlight at `p` before anything is selected: an element (and the wheel's chosen ancestor) or the window.
+    private func hoverTarget(at p: CGPoint) -> CGRect? {
+        let window = windowRects.first { $0.contains(p) }
+        guard detectElements, let hierarchy else { return window }
+        let chain = hierarchy.chain(at: p, within: window)
+        if chain.first != elementChain.first { elementLevel = 0 }
+        elementChain = chain
+        guard !chain.isEmpty else { return window }
+        return chain[min(elementLevel, chain.count - 1)]
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         if mode.isBoard {
             // No dimming, border or handles: the whole screen is the canvas.
@@ -567,7 +591,7 @@ final class CaptureView: NSView {
             return
         }
         if !hasSelection {
-            let hover = windowRects.first { $0.contains(p) }
+            let hover = hoverTarget(at: p)
             if hover != hoverRect {
                 let old = hoverRect ?? .null
                 hoverRect = hover
@@ -805,6 +829,19 @@ final class CaptureView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        if !hasSelection, !elementChain.isEmpty {
+            // Wheel up walks out to the containing element, wheel down back in.
+            scrollAccumulator += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 6 : event.scrollingDeltaY
+            guard abs(scrollAccumulator) >= 1 else { return }
+            let steps = Int(scrollAccumulator.rounded(.towardZero))
+            scrollAccumulator = 0
+            elementLevel = min(max(0, elementLevel + steps), elementChain.count - 1)
+            let old = hoverRect ?? .null
+            hoverRect = elementChain[elementLevel]
+            invalidate(old, hoverRect ?? .null, margin: 4)
+            layoutChrome()
+            return
+        }
         guard hasSelection, let tool = textEditor != nil ? .text : selectedTool ?? tool else { return }
         if tool.usesAreaModes {
             let brush = item(selectedID).map { $0.shape.isMosaicBrush } ?? (StyleMemory.areaMode(for: tool) == .brush)
@@ -1288,6 +1325,15 @@ final class CaptureView: NSView {
         }
 
         guard hasSelection else {
+            if code == 48, flags.isEmpty {
+                // Tab: elements or whole windows.
+                detectElements.toggle()
+                elementChain = []
+                elementLevel = 0
+                primeCursor()
+                showToast(detectElements ? (hierarchy == nil ? "识别界面元素（需要辅助功能权限）" : "识别界面元素 · 滚轮切换父/子元素") : "只识别窗口", duration: 1.5)
+                return
+            }
             if let d = arrows[code] {
                 let step: CGFloat = flags.contains(.shift) ? 10 : 1
                 warpCursor(by: CGPoint(x: d.x * step, y: d.y * step))
