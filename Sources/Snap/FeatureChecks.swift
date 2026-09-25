@@ -48,6 +48,7 @@ enum FeatureChecks {
         ("pin-filters", pinFilters),
         ("pin-multi", pinMulti),
         ("super-snip", superSnip),
+        ("print", printing),
     ]
 
     @MainActor
@@ -1229,5 +1230,18 @@ enum FeatureChecks {
             print("SKIP  live event tap: no Accessibility permission for this process")
         }
         SuperSnip.shared.setEnabled(false)
+    }
+
+    @MainActor static func printing() async {
+        let pdf = outputDirectory.appendingPathComponent("print.pdf")
+        try? FileManager.default.removeItem(at: pdf)
+        let rep = sampleRep(CGSize(width: 1600, height: 900), color: .systemRed)
+        let ok = Printer.operation(for: rep, pdf: pdf).run()
+        let doc = CGPDFDocument(pdf as CFURL)
+        expect(ok && doc?.numberOfPages == 1, "prints on exactly one page (pages: \(doc?.numberOfPages ?? 0))")
+        if let page = doc?.page(at: 1) {
+            let box = page.getBoxRect(.mediaBox)
+            expect(box.width > box.height, "a wide image prints in landscape (\(box.size))")
+        }
     }
 }

@@ -1410,6 +1410,7 @@ final class CaptureView: NSView {
             case "c": finish(.copy)
             case "s": finish(.save)
             case "t": handle(.pin)
+            case "p": printSelection()
             default: super.keyDown(with: event)
             }
             return
@@ -1832,6 +1833,16 @@ final class CaptureView: NSView {
         Sound.playCapture()
         PinManager.shared.pin(rep, frame: frame)
         if let saved { HUD.show("已贴图，并自动保存到 \(saved)", on: window?.screen) }
+    }
+
+    /// Closes the overlay (the print panel would open underneath it) and prints the selection.
+    private func printSelection() {
+        commitText()
+        endChange()
+        guard hasSelection, let rep = exportImage(format: .png, shadow: false) else { return }
+        session?.record(self)
+        session?.finish()
+        DispatchQueue.main.async { Printer.print(rep) }
     }
 
     /// Closes the overlay (it sits above menus) and opens the share menu where the selection was.

@@ -424,6 +424,8 @@ final class PinWindow: NSPanel {
             destroy()
         } else if flags == .command && key == "w" {
             for pin in PinManager.shared.targets(for: self) { pin.close(keepInHistory: true) }
+        } else if flags == .command && key == "p" {
+            printImage()
         } else if flags == .command && key == "a" {
             PinManager.shared.selectAllShown()
         } else if event.keyCode == 53 {
@@ -558,6 +560,10 @@ final class PinWindow: NSPanel {
 
     @objc func closeFromMenu() { close(keepInHistory: true) }
 
+    @objc func printImage() {
+        Printer.print(displayedRep)
+    }
+
     @objc func share() {
         ShareController.share(displayedRep, relativeTo: pinView)
     }
@@ -666,6 +672,7 @@ final class PinWindow: NSPanel {
         menu.items.last?.keyEquivalentModifierMask = []
         menu.addItem(item("识别文字", #selector(recognizeText)))
         menu.addItem(item("分享…", #selector(share)))
+        menu.addItem(item("打印…", #selector(printImage), "p"))
         menu.addItem(.separator())
         menu.addItem(item(thumbnail == nil ? "缩略图" : "恢复原大小", #selector(toggleThumbnail)))
         if thumbnail != nil { menu.addItem(item("裁剪为此区域", #selector(cropToThumbnail))) }
