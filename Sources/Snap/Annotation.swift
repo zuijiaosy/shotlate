@@ -1,7 +1,7 @@
 import AppKit
 
 enum Tool: String, CaseIterable {
-    case rectangle, ellipse, line, arrow, pen, highlighter, mosaic, text, number
+    case rectangle, ellipse, line, arrow, pen, highlighter, mosaic, eraser, text, number
 
     var title: String {
         switch self {
@@ -12,6 +12,7 @@ enum Tool: String, CaseIterable {
         case .pen: return "画笔"
         case .highlighter: return "记号笔"
         case .mosaic: return "马赛克"
+        case .eraser: return "橡皮擦"
         case .text: return "文字"
         case .number: return "序号"
         }
@@ -26,6 +27,7 @@ enum Tool: String, CaseIterable {
         case .pen: return "scribble"
         case .highlighter: return "highlighter"
         case .mosaic: return "checkerboard.rectangle"
+        case .eraser: return "eraser"
         case .text: return "textformat"
         case .number: return "1.circle"
         }
@@ -41,6 +43,7 @@ enum Tool: String, CaseIterable {
         case .pen: return "p"
         case .highlighter: return "h"
         case .mosaic: return "m"
+        case .eraser: return "e"
         case .text: return "t"
         case .number: return "n"
         }
@@ -49,7 +52,7 @@ enum Tool: String, CaseIterable {
     /// What "size" means differs per tool: stroke width, brush width, font size or badge diameter.
     var sizeRange: ClosedRange<CGFloat> {
         switch self {
-        case .mosaic: return 6...120
+        case .mosaic, .eraser: return 6...120
         case .highlighter: return 6...60
         case .text: return 10...120
         case .number: return 14...80
@@ -59,7 +62,7 @@ enum Tool: String, CaseIterable {
 
     var sizePresets: [CGFloat] {
         switch self {
-        case .mosaic: return [12, 24, 48]
+        case .mosaic, .eraser: return [12, 24, 48]
         case .highlighter: return [12, 20, 32]
         case .text: return [14, 20, 32]
         case .number: return [20, 26, 36]
@@ -70,11 +73,18 @@ enum Tool: String, CaseIterable {
     var defaultSize: CGFloat { sizePresets[1] }
 
     /// Freehand tools always draw, even when the stroke starts on an existing annotation.
-    var isFreehand: Bool { self == .pen || self == .highlighter || self == .mosaic }
+    var isFreehand: Bool { self == .pen || self == .highlighter || self.usesAreaModes }
+
+    /// Mosaic and eraser work either as a brush or on a dragged box.
+    var usesAreaModes: Bool { self == .mosaic || self == .eraser }
 }
 
 enum MosaicMode: String { case brush, rect }
-enum MosaicEffect: String { case pixelate, blur }
+enum MosaicEffect: String {
+    case pixelate, blur
+    /// The untouched screenshot: this is how the eraser removes annotations under it.
+    case original
+}
 
 enum Shape: Equatable {
     case rectangle(CGRect)
@@ -106,7 +116,7 @@ struct AnnotationItem: Equatable {
         case .arrow: return .arrow
         case .pen: return .pen
         case .highlighter: return .highlighter
-        case .mosaicRect, .mosaicBrush: return .mosaic
+        case .mosaicRect, .mosaicBrush: return effect == .original ? .eraser : .mosaic
         case .text: return .text
         case .number: return .number
         }

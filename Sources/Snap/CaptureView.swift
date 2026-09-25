@@ -7,11 +7,14 @@ enum StyleMemory {
     static var color: NSColor = StyleState.palette[0]
     static var sizes: [Tool: CGFloat] = [:]
     static var mosaicMode: MosaicMode = .brush
+    static var eraserMode: MosaicMode = .brush
     static var mosaicEffect: MosaicEffect = .pixelate
     static var hexColor = true
     static var lastSelection: [CGDirectDisplayID: CGRect] = [:]
 
     static func size(for tool: Tool) -> CGFloat { sizes[tool] ?? tool.defaultSize }
+    static func areaMode(for tool: Tool) -> MosaicMode { tool == .eraser ? eraserMode : mosaicMode }
+    static func areaEffect(for tool: Tool) -> MosaicEffect { tool == .eraser ? .original : mosaicEffect }
 }
 
 private enum Drag {
@@ -222,7 +225,7 @@ final class CaptureView: NSView {
             dashedRect(hovered.bounds.insetBy(dx: -3, dy: -3), alpha: 0.5)
         }
         guard let item = item(selectedID), editingID != item.id else { return }
-        if item.handles.isEmpty || item.tool == .mosaic {
+        if item.handles.isEmpty || item.tool.usesAreaModes {
             dashedRect(item.bounds.insetBy(dx: -3, dy: -3))
         }
         for (_, p) in item.handles {
@@ -255,6 +258,7 @@ final class CaptureView: NSView {
     }
 
     private func effectImage(_ effect: MosaicEffect) -> NSImage {
+        if effect == .original { return baseImage }
         if let cached = effectImages[effect] { return cached }
         let input = CIImage(cgImage: snapshot)
         let output: CIImage?
@@ -270,6 +274,8 @@ final class CaptureView: NSView {
             filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
             filter.setValue(9 * scale, forKey: kCIInputRadiusKey)
             output = filter.outputImage
+        case .original:
+            output = input
         }
         guard let output, let cg = CIContext().createCGImage(output.cropped(to: input.extent), from: input.extent)
         else { return baseImage }
@@ -635,15 +641,15 @@ final class CaptureView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard hasSelection, let tool = textEditor != nil ? .text : selectedTool ?? tool else { return }
-        if tool == .mosaic {
-            let brush = item(selectedID).map { $0.shape.isMosaicBrush } ?? (StyleMemory.mosaicMode == .brush)
+        if tool.usesAreaModes {
+            let brush = item(selectedID).map { $0.shape.isMosaicBrush } ?? (StyleMemory.areaMode(for: tool) == .brush)
             guard brush else { return }
         }
         scrollAccumulator += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 6 : event.scrollingDeltaY
         guard abs(scrollAccumulator) >= 1 else { return }
         let steps = scrollAccumulator.rounded(.towardZero)
         scrollAccumulator -= steps
-        let unit: CGFloat = tool == .mosaic || tool == .highlighter || tool == .text || tool == .number ? 2 : 1
+        let unit: CGFloat = tool.usesAreaModes || tool == .highlighter || tool == .text || tool == .number ? 2 : 1
         let current = currentStyle?.size ?? tool.defaultSize
         applyStyle(.size(current + steps * unit), coalesce: true)
     }
@@ -721,13 +727,14 @@ final class CaptureView: NSView {
         case .highlighter:
             draft = AnnotationItem(shape: .highlighter([p]), color: color, size: size)
             drag = .drawing(p)
-        case .mosaic:
-            if StyleMemory.mosaicMode == .brush {
-                let item = AnnotationItem(shape: .mosaicBrush([p]), color: color, size: size, effect: StyleMemory.mosaicEffect)
+        case .mosaic, .eraser:
+            let effect = StyleMemory.areaEffect(for: tool)
+            if StyleMemory.areaMode(for: tool) == .brush {
+                let item = AnnotationItem(shape: .mosaicBrush([p]), color: color, size: size, effect: effect)
                 draft = item
                 invalidate(item.bounds)
             } else {
-                draft = AnnotationItem(shape: .mosaicRect(CGRect(origin: p, size: .zero)), color: color, size: size, effect: StyleMemory.mosaicEffect)
+                draft = AnnotationItem(shape: .mosaicRect(CGRect(origin: p, size: .zero)), color: color, size: size, effect: effect)
             }
             drag = .drawing(p)
         case .rectangle, .ellipse, .line, .arrow:
@@ -878,12 +885,14 @@ final class CaptureView: NSView {
         }
         guard let tool else { return nil }
         return StyleState(tool: tool, color: StyleMemory.color, size: StyleMemory.size(for: tool),
-                          mosaicMode: StyleMemory.mosaicMode, mosaicEffect: StyleMemory.mosaicEffect)
+                          mosaicMode: StyleMemory.areaMode(for: tool), mosaicEffect: StyleMemory.areaEffect(for: tool))
     }
 
     private func applyStyle(_ action: StyleAction) {
         applyStyle(action, coalesce: false)
     }
+
+    var testing_items: [AnnotationItem] { items }
 
     /// Lets the offscreen UI demo press style-bar buttons.
     func testing_applyStyle(_ action: StyleAction) {
@@ -906,7 +915,8 @@ final class CaptureView: NSView {
         switch action {
         case .size: StyleMemory.sizes[styleTool] = clampedSize
         case let .color(c): StyleMemory.color = c
-        case let .mosaicMode(m): StyleMemory.mosaicMode = m
+        case let .mosaicMode(m):
+            if styleTool == .eraser { StyleMemory.eraserMode = m } else { StyleMemory.mosaicMode = m }
         case let .mosaicEffect(e): StyleMemory.mosaicEffect = e
         case .customColor: break
         }

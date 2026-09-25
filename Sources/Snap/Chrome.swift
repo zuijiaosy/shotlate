@@ -289,7 +289,7 @@ final class StyleBarView: PanelView {
 
     /// Rebuilds the controls when the tool (or mosaic mode) changes, otherwise just refreshes state.
     func configure(_ state: StyleState) {
-        guard configuredTool != state.tool || (state.tool == .mosaic && configuredMode != state.mosaicMode) else {
+        guard configuredTool != state.tool || (state.tool.usesAreaModes && configuredMode != state.mosaicMode) else {
             update(state)
             return
         }
@@ -302,17 +302,19 @@ final class StyleBarView: PanelView {
         effectButtons = [:]
         customButton = nil
 
-        if state.tool == .mosaic {
+        if state.tool.usesAreaModes {
             for (mode, symbol, tip) in [(MosaicMode.brush, "paintbrush.pointed", "画笔涂抹"), (.rect, "rectangle.dashed", "框选区域")] {
                 let b = ChromeButton(image: symbolImage(symbol, size: 13), tooltip: tip, size: 28) { [unowned self] in self.handler(.mosaicMode(mode)) }
                 modeButtons[mode] = b
                 stack.addArrangedSubview(b)
             }
-            stack.addArrangedSubview(separator(height: 16))
-            for (effect, symbol, tip) in [(MosaicEffect.pixelate, "square.grid.3x3.fill", "格子"), (.blur, "drop.fill", "毛玻璃")] {
-                let b = ChromeButton(image: symbolImage(symbol, size: 13), tooltip: tip, size: 28) { [unowned self] in self.handler(.mosaicEffect(effect)) }
-                effectButtons[effect] = b
-                stack.addArrangedSubview(b)
+            if state.tool == .mosaic {
+                stack.addArrangedSubview(separator(height: 16))
+                for (effect, symbol, tip) in [(MosaicEffect.pixelate, "square.grid.3x3.fill", "格子"), (.blur, "drop.fill", "毛玻璃")] {
+                    let b = ChromeButton(image: symbolImage(symbol, size: 13), tooltip: tip, size: 28) { [unowned self] in self.handler(.mosaicEffect(effect)) }
+                    effectButtons[effect] = b
+                    stack.addArrangedSubview(b)
+                }
             }
             if state.mosaicMode == .brush {
                 stack.addArrangedSubview(separator(height: 16))

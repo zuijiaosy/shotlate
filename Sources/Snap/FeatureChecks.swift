@@ -19,6 +19,7 @@ enum FeatureChecks {
         ("pin-clipboard", pinClipboard),
         ("countdown", countdown),
         ("highlighter", highlighter),
+        ("eraser", eraser),
     ]
 
     @MainActor
@@ -210,5 +211,37 @@ enum FeatureChecks {
             expect(abs(onScreen.redComponent - exported.redComponent) < 0.08 && abs(onScreen.greenComponent - exported.greenComponent) < 0.08,
                    "on-screen overlay matches the export (\(onScreen) vs \(exported))")
         }
+    }
+
+    @MainActor static func eraser() async {
+        let h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 600, height: 360))
+        StyleMemory.color = StyleState.palette[0]
+        h.key("r", code: 15)
+        h.drag(CGPoint(x: 100, y: 100), CGPoint(x: 400, y: 250))
+        h.key("e", code: 14)
+        StyleMemory.eraserMode = .brush
+        // Brush across the top edge of the rectangle.
+        h.drag(CGPoint(x: 150, y: 100), CGPoint(x: 350, y: 100))
+        // Box over the bottom-right corner.
+        StyleMemory.eraserMode = .rect
+        h.drag(CGPoint(x: 360, y: 220), CGPoint(x: 420, y: 270))
+        guard let rep = h.export() else { return expect(false, "export") }
+        write(rep, "eraser.png")
+        func out(_ x: CGFloat, _ y: CGFloat) -> NSColor { rep.color(atPoint: CGPoint(x: x - 40, y: y - 40))! }
+        func same(_ a: NSColor, _ b: NSColor) -> Bool {
+            abs(a.redComponent - b.redComponent) < 0.03 && abs(a.greenComponent - b.greenComponent) < 0.03 && abs(a.blueComponent - b.blueComponent) < 0.03
+        }
+        let keptEdge = out(100, 175)
+        expect(keptEdge.redComponent > 0.8 && keptEdge.greenComponent < 0.4, "left edge outside the eraser stays red")
+        expect(same(out(250, 100), h.original(CGPoint(x: 250, y: 100))!), "brush restores the original pixels on the top edge")
+        expect(same(out(400, 240), h.original(CGPoint(x: 400, y: 240))!), "box restores the original pixels at the corner")
+        let items = h.view.testing_items
+        expect(items.filter { $0.tool == .eraser }.count == 2, "both eraser strokes are annotations (undoable, movable)")
+        h.key("z", code: 6, flags: .command)
+        h.key("z", code: 6, flags: .command)
+        let undone = h.export()!.color(atPoint: CGPoint(x: 250 - 40, y: 100 - 40))!
+        expect(undone.redComponent > 0.8 && undone.greenComponent < 0.4, "undo brings the erased edge back")
+        h.screenshot().map { write($0, "eraser-overlay.png") }
     }
 }
