@@ -7,7 +7,7 @@
 - 纯 Swift 编写，没有第三方依赖。要求 macOS 14 或更高版本。
 - 小：安装包约 3 MB（Apple 芯片和 Intel 通用），常驻菜单栏时内存占用约 50 MB。
 
-官网：[shotlate.workers.dev](https://shotlate.workers.dev) · 下载：[最新版本](https://github.com/zuijiaosy/shotlate/releases/latest)
+官网：[shotlate.12855146095252.workers.dev](https://shotlate.12855146095252.workers.dev) · 下载：[最新版本](https://github.com/zuijiaosy/shotlate/releases/latest)
 
 ![一次完整的截图：悬停选中窗口，框选，画框、箭头和序号，最后按 X 识别文字](docs/images/capture-flow.gif)
 
