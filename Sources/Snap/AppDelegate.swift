@@ -1,9 +1,12 @@
 import AppKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var captureItem: NSMenuItem!
-    private var hotKey: HotKey!
+    private var pinClipboardItem: NSMenuItem!
+    private var restorePinItem: NSMenuItem!
+    private var closePinsItem: NSMenuItem!
+    private var passthroughItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
@@ -14,23 +17,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = image
 
         let menu = NSMenu()
-        captureItem = NSMenuItem(title: "截图", action: #selector(capture), keyEquivalent: "")
-        captureItem.target = self
+        menu.delegate = self
+        captureItem = item("截图", #selector(capture))
         menu.addItem(captureItem)
         menu.addItem(.separator())
-        let settings = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
-        settings.target = self
-        menu.addItem(settings)
+        pinClipboardItem = item("从剪贴板贴图", #selector(pinClipboard))
+        menu.addItem(pinClipboardItem)
+        restorePinItem = item("恢复关闭的贴图", #selector(restorePin))
+        menu.addItem(restorePinItem)
+        closePinsItem = item("关闭全部贴图", #selector(closePins))
+        menu.addItem(closePinsItem)
+        passthroughItem = item("取消贴图的鼠标穿透", #selector(disablePassthrough))
+        menu.addItem(passthroughItem)
+        menu.addItem(.separator())
+        menu.addItem(item("设置…", #selector(openSettings), ","))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 Snap", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
-        hotKey = HotKey { CaptureSession.begin() }
-        registerHotKey()
+        registerHotKeys()
         let center = NotificationCenter.default
-        center.addObserver(forName: Settings.didChange, object: nil, queue: .main) { [weak self] _ in self?.registerHotKey() }
-        center.addObserver(forName: .snapPauseHotKey, object: nil, queue: .main) { [weak self] _ in self?.hotKey.unregister() }
-        center.addObserver(forName: .snapResumeHotKey, object: nil, queue: .main) { [weak self] _ in self?.registerHotKey() }
+        center.addObserver(forName: Settings.didChange, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
+        center.addObserver(forName: .snapPauseHotKey, object: nil, queue: .main) { _ in HotKeyCenter.shared.unregisterAll() }
+        center.addObserver(forName: .snapResumeHotKey, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
 
         TextRecognizer.warmUp()
 
@@ -39,16 +48,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func registerHotKey() {
-        let shortcut = Settings.shared.shortcut
-        let ok = hotKey.register(shortcut)
-        captureItem.title = ok ? "截图（\(shortcut.displayString)）" : "截图（快捷键 \(shortcut.displayString) 已被占用）"
+    private func item(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        return item
+    }
+
+    private func registerHotKeys() {
+        let settings = Settings.shared
+        let capture = settings.shortcut
+        let ok = HotKeyCenter.shared.register(.capture, shortcut: capture) { CaptureSession.begin() }
+        captureItem.title = ok ? "截图（\(capture.displayString)）" : "截图（快捷键 \(capture.displayString) 已被占用）"
+
+        let pin = settings.pinClipboardShortcut
+        let pinOK = HotKeyCenter.shared.register(.pinClipboard, shortcut: pin) { PinManager.shared.pinClipboard() }
+        if let pin {
+            pinClipboardItem.title = pinOK ? "从剪贴板贴图（\(pin.displayString)）" : "从剪贴板贴图（快捷键 \(pin.displayString) 已被占用）"
+        } else {
+            pinClipboardItem.title = "从剪贴板贴图"
+        }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let pins = PinManager.shared
+        restorePinItem.isEnabled = pins.hasHistory
+        closePinsItem.isEnabled = pins.hasPins
+        passthroughItem.isHidden = !pins.hasPassthrough
     }
 
     @objc private func capture() {
         // Let the menu close before the screen is frozen.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { CaptureSession.begin() }
     }
+
+    @objc private func pinClipboard() { PinManager.shared.pinClipboard() }
+    @objc private func restorePin() { PinManager.shared.restoreLast() }
+    @objc private func closePins() { PinManager.shared.closeAll() }
+    @objc private func disablePassthrough() { PinManager.shared.disablePassthrough() }
 
     @objc private func openSettings() {
         SettingsWindowController.shared.present()

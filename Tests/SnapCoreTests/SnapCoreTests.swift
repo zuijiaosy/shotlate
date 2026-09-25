@@ -202,3 +202,127 @@ import Testing
         #expect(cache.get("Save", config: config) == "保存")
     }
 }
+
+@Suite struct StitcherTests {
+    static let width = 96
+
+    /// A distinct pattern per content row, so every row hashes differently.
+    static func contentRow(_ n: Int) -> [UInt8] {
+        var row = [UInt8]()
+        for x in 0..<width {
+            let v = UInt8((n * 37 + x * 11 + (n * x) % 23) % 200 + 40) & 0xF8
+            row += [v, UInt8((n * 13 + x) % 250) & 0xF8, UInt8((n + x * 7) % 250) & 0xF8, 255]
+        }
+        return row
+    }
+
+    static func solidRow(_ v: UInt8) -> [UInt8] {
+        [UInt8](repeating: v, count: width * 4)
+    }
+
+    /// A 100-row window over tall content scrolled by `scroll`, with a 10-row header and 8-row footer that never move.
+    /// `jitter` adds ±1 noise to every color value, like successive real screen captures.
+    static func frame(scroll: Int, header: Bool = true, jitter: Bool = false) -> PixelBuffer {
+        var data = [UInt8]()
+        for y in 0..<100 {
+            if header, y < 10 { data += solidRow(y % 2 == 0 ? 16 : 32); continue }
+            if header, y >= 92 { data += solidRow(y % 2 == 0 ? 200 : 224); continue }
+            data += contentRow(scroll + y)
+        }
+        if jitter {
+            var rng = SystemRandomNumberGenerator()
+            for i in data.indices where i % 4 != 3 {
+                let v = Int(data[i]) + Int.random(in: -1...1, using: &rng)
+                data[i] = UInt8(min(max(v, 0), 255))
+            }
+        }
+        return PixelBuffer(width: width, height: 100, bytesPerRow: width * 4, data: data)
+    }
+
+    @Test func stitchesWithStickyHeaderAndFooter() {
+        let stitcher = ScrollStitcher()
+        #expect(stitcher.add(Self.frame(scroll: 0)) == .started)
+        #expect(stitcher.add(Self.frame(scroll: 30)) == .appended(30))
+        #expect(stitcher.add(Self.frame(scroll: 30)) == .unchanged)
+        #expect(stitcher.add(Self.frame(scroll: 70)) == .appended(40))
+        // Header once, content rows 10..<162, footer once.
+        #expect(stitcher.height == 10 + 152 + 8)
+        #expect(Array(stitcher.row(0)) == Self.solidRow(16))
+        #expect(Array(stitcher.row(10)) == Self.contentRow(10))
+        #expect(Array(stitcher.row(161)) == Self.contentRow(161))
+        #expect(Array(stitcher.row(162)) == Self.solidRow(200)) // footer row 92
+        #expect(stitcher.makeImage()?.height == 170)
+        #expect(stitcher.makePreview(targetWidth: 48)?.height == 85)
+    }
+
+    @Test func toleratesCaptureJitter() {
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(Self.frame(scroll: 0, jitter: true))
+        #expect(stitcher.add(Self.frame(scroll: 0, jitter: true)) == .unchanged)
+        #expect(stitcher.add(Self.frame(scroll: 25, jitter: true)) == .appended(25))
+        #expect(stitcher.add(Self.frame(scroll: 60, jitter: true)) == .appended(35))
+        #expect(stitcher.height == 10 + (60 + 92 - 10) + 8)
+    }
+
+    @Test func roundedBottomCornersStayOutOfTheMiddle() {
+        // The last 4 rows have "desktop" pixels in their outer columns, like a window's rounded corners,
+        // while the content between them keeps scrolling.
+        func cornered(_ frame: PixelBuffer) -> PixelBuffer {
+            var data = frame.data
+            for y in 96..<100 {
+                for x in [0, 1, 2, Self.width - 3, Self.width - 2, Self.width - 1] {
+                    data.replaceSubrange((y * Self.width + x) * 4 ..< (y * Self.width + x) * 4 + 3, with: [255, 0, 255])
+                }
+            }
+            return PixelBuffer(width: frame.width, height: frame.height, bytesPerRow: frame.bytesPerRow, data: data)
+        }
+        let stitcher = ScrollStitcher()
+        for scroll in stride(from: 0, through: 120, by: 20) {
+            _ = stitcher.add(cornered(Self.frame(scroll: scroll, header: false)))
+        }
+        #expect(stitcher.height == 220)
+        for y in 0..<(stitcher.height - 4) {
+            #expect(stitcher.row(y) == Self.contentRow(y), "row \(y) should be plain content")
+        }
+    }
+
+    @Test func ignoresBackwardScrollAndResumes() {
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(Self.frame(scroll: 0))
+        _ = stitcher.add(Self.frame(scroll: 40))
+        #expect(stitcher.add(Self.frame(scroll: 20)) == .scrolledBack)
+        #expect(stitcher.add(Self.frame(scroll: 60)) == .appended(20))
+        #expect(stitcher.height == 10 + (60 + 92 - 10) + 8)
+    }
+
+    @Test func reportsJumpWithoutOverlap() {
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(Self.frame(scroll: 0))
+        #expect(stitcher.add(Self.frame(scroll: 500)) == .noOverlap)
+        #expect(stitcher.height == 100)
+    }
+
+    @Test func stopsAtHeightLimit() {
+        let stitcher = ScrollStitcher(maxHeight: 120)
+        _ = stitcher.add(Self.frame(scroll: 0))
+        #expect(stitcher.add(Self.frame(scroll: 30)) == .limitReached)
+    }
+
+    @Test func ignoresChangingScrollBarColumns() {
+        // Same content, but the right-most 4 columns differ between frames like a moving scroll bar knob.
+        func withKnob(_ frame: PixelBuffer, _ v: UInt8) -> PixelBuffer {
+            var data = frame.data
+            for y in 0..<frame.height {
+                for x in (Self.width - 8)..<Self.width { data[(y * Self.width + x) * 4 ..< (y * Self.width + x) * 4 + 3] = [v, v, v] }
+            }
+            return PixelBuffer(width: frame.width, height: frame.height, bytesPerRow: frame.bytesPerRow, data: data)
+        }
+        let strict = ScrollStitcher()
+        _ = strict.add(withKnob(Self.frame(scroll: 0, header: false), 0))
+        #expect(strict.add(withKnob(Self.frame(scroll: 30, header: false), 128)) == .noOverlap)
+
+        let tolerant = ScrollStitcher(ignoredRightColumns: 8)
+        _ = tolerant.add(withKnob(Self.frame(scroll: 0, header: false), 0))
+        #expect(tolerant.add(withKnob(Self.frame(scroll: 30, header: false), 128)) == .appended(30))
+    }
+}

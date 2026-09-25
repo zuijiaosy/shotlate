@@ -20,6 +20,25 @@ enum DevTools {
             }
             app.run()
         }
+        if args.count >= 4, args[1] == "--stitch-diagnose" {
+            func load(_ path: String) -> PixelBuffer? {
+                guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+                      let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+                return PixelBuffer(image: image)
+            }
+            if let a = load(args[2]), let b = load(args[3]) {
+                print(ScrollStitcher(ignoredRightColumns: 36).diagnose(a, b))
+            }
+            exit(0)
+        }
+        if args.count >= 3, args[1] == "--scroll-demo" {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            Task { @MainActor in
+                ScrollDemo.run(output: URL(fileURLWithPath: args[2]))
+            }
+            app.run()
+        }
         guard args.count >= 4, args[1] == "--translate-image" else { return }
         var scale: CGFloat = 1
         if let i = args.firstIndex(of: "--scale"), i + 1 < args.count, let s = Double(args[i + 1]) { scale = CGFloat(s) }

@@ -975,6 +975,7 @@ final class CaptureView: NSView {
             case "z": undo(nil)
             case "c": finish(.copy)
             case "s": finish(.save)
+            case "t": handle(.pin)
             default: super.keyDown(with: event)
             }
             return
@@ -994,6 +995,8 @@ final class CaptureView: NSView {
             handle(.ocr)
         } else if key == "y" {
             handle(.translate)
+        } else if key == "s" {
+            handle(.longCapture)
         }
     }
 
@@ -1176,6 +1179,10 @@ final class CaptureView: NSView {
             runOCR()
         case .translate:
             runTranslation()
+        case .pin:
+            pinSelection()
+        case .longCapture:
+            startLongCapture()
         case .cancel:
             session?.cancel()
         case .save:
@@ -1341,10 +1348,40 @@ final class CaptureView: NSView {
     // MARK: - Output
 
     /// The image that copy/save would produce right now.
-    func exportImage(format: ImageFormat) -> NSBitmapImageRep? {
-        let options = ExportOptions(cornerRadius: cornerRadius, shadow: shadowEnabled, format: format)
+    func exportImage(format: ImageFormat, shadow: Bool? = nil) -> NSBitmapImageRep? {
+        let options = ExportOptions(cornerRadius: cornerRadius, shadow: shadow ?? shadowEnabled, format: format)
         return Exporter.render(renderer: renderer, selection: selection, scale: scale,
                                items: items, translation: visibleTranslation, options: options)
+    }
+
+    /// The selection in global screen coordinates.
+    private var selectionOnScreen: CGRect? {
+        guard let window else { return nil }
+        return CGRect(x: window.frame.minX + selection.minX, y: window.frame.maxY - selection.maxY,
+                      width: selection.width, height: selection.height)
+    }
+
+    /// Floats the current selection (with annotations and translation) above other windows, where it was captured.
+    private func pinSelection() {
+        commitText()
+        endChange()
+        guard hasSelection, let frame = selectionOnScreen, let rep = exportImage(format: .png, shadow: false) else { return }
+        StyleMemory.lastSelection[displayID] = selection
+        session?.finish()
+        Sound.playCapture()
+        PinManager.shared.pin(rep, frame: frame)
+    }
+
+    /// Hands the selected region to the long-screenshot controller. Annotations are not carried over.
+    private func startLongCapture() {
+        guard hasSelection, let rect = selectionOnScreen, let screen = window?.screen else { return }
+        guard selection.height >= 60 else {
+            showToast("选区太矮了，长截图需要至少 60pt 高的滚动区域")
+            return
+        }
+        StyleMemory.lastSelection[displayID] = selection
+        session?.finish()
+        ScrollCaptureController.start(rect: rect, screen: screen)
     }
 
     private func finish(_ output: OutputAction) {
@@ -1363,11 +1400,13 @@ final class CaptureView: NSView {
         case .copy:
             Exporter.copy(rep)
             session?.finish()
+            Sound.playCapture()
             HUD.show("已复制到剪贴板", on: screen)
         case .save:
             do {
                 let url = try Exporter.save(rep, format: format, directory: settings.saveDirectory)
                 session?.finish()
+                Sound.playCapture()
                 HUD.show("已保存到 \(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))", on: screen)
             } catch {
                 showToast("保存失败：\(error.localizedDescription)", duration: 5)

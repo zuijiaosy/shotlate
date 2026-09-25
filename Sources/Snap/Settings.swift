@@ -10,6 +10,7 @@ struct Shortcut: Codable, Equatable {
     var keyLabel: String
 
     static let `default` = Shortcut(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: UInt32(optionKey), keyLabel: "A")
+    static let defaultPinClipboard = Shortcut(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(optionKey | shiftKey), keyLabel: "V")
 
     init(keyCode: UInt32, carbonModifiers: UInt32, keyLabel: String) {
         self.keyCode = keyCode
@@ -119,6 +120,20 @@ final class Settings {
             return value
         }
         set { defaults.set(try? JSONEncoder().encode(newValue), forKey: "capture.shortcut") }
+    }
+
+    /// nil means the user cleared the shortcut.
+    var pinClipboardShortcut: Shortcut? {
+        get {
+            guard let data = defaults.data(forKey: "pin.shortcut") else { return .defaultPinClipboard }
+            return try? JSONDecoder().decode(Shortcut.self, from: data)
+        }
+        set { defaults.set(newValue.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: "pin.shortcut") }
+    }
+
+    var playSound: Bool {
+        get { defaults.bool(forKey: "output.sound") }
+        set { defaults.set(newValue, forKey: "output.sound") }
     }
 
     var translationConfig: TranslationConfig {

@@ -1,6 +1,9 @@
 import AppKit
+import ServiceManagement
 import SnapCore
 import SwiftUI
+
+enum ShortcutTarget { case capture, pinClipboard }
 
 final class SettingsModel: ObservableObject {
     @Published var baseURL = Settings.shared.baseURL
@@ -10,7 +13,11 @@ final class SettingsModel: ObservableObject {
     @Published var saveDirectory = Settings.shared.saveDirectory
     @Published var imageFormat = Settings.shared.imageFormat
     @Published var shortcut = Settings.shared.shortcut
-    @Published var isRecordingShortcut = false
+    @Published var pinShortcut = Settings.shared.pinClipboardShortcut
+    @Published var recording: ShortcutTarget?
+    @Published var playSound = Settings.shared.playSound
+    @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @Published var loginItemError: String?
     @Published var testResult: String?
     @Published var isTesting = false
     @Published var savedMessage: String?
@@ -30,6 +37,9 @@ final class SettingsModel: ObservableObject {
         s.saveDirectory = saveDirectory
         s.imageFormat = imageFormat
         s.shortcut = shortcut
+        s.pinClipboardShortcut = pinShortcut
+        s.playSound = playSound
+        applyLaunchAtLogin()
         NotificationCenter.default.post(name: Settings.didChange, object: nil)
         savedMessage = "已保存"
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.savedMessage = nil }
@@ -65,10 +75,27 @@ final class SettingsModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { saveDirectory = url }
     }
 
+    /// Registers or removes the login item. Only works from the built app bundle, not `swift run`.
+    private func applyLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if launchAtLogin, service.status != .enabled {
+                try service.register()
+            } else if !launchAtLogin, service.status == .enabled {
+                try service.unregister()
+            }
+            loginItemError = nil
+        } catch {
+            loginItemError = "设置开机启动失败：\(error.localizedDescription)"
+            launchAtLogin = service.status == .enabled
+        }
+    }
+
     private var monitor: Any?
 
-    func startRecordingShortcut() {
-        isRecordingShortcut = true
+    func startRecording(_ target: ShortcutTarget) {
+        if recording != nil { stopRecordingShortcut() }
+        recording = target
         NotificationCenter.default.post(name: .snapPauseHotKey, object: nil)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
@@ -77,7 +104,11 @@ final class SettingsModel: ObservableObject {
                 return nil
             }
             if let shortcut = Shortcut(event: event) {
-                self.shortcut = shortcut
+                switch self.recording {
+                case .capture: self.shortcut = shortcut
+                case .pinClipboard: self.pinShortcut = shortcut
+                case nil: break
+                }
                 self.stopRecordingShortcut()
             }
             return nil
@@ -87,7 +118,7 @@ final class SettingsModel: ObservableObject {
     func stopRecordingShortcut() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
-        isRecordingShortcut = false
+        recording = nil
         NotificationCenter.default.post(name: .snapResumeHotKey, object: nil)
     }
 }
@@ -103,9 +134,19 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("截图") {
-                LabeledContent("快捷键") {
-                    Button(model.isRecordingShortcut ? "请按下新的组合键…（Esc 取消）" : model.shortcut.displayString) {
-                        model.isRecordingShortcut ? model.stopRecordingShortcut() : model.startRecordingShortcut()
+                LabeledContent("截图快捷键") {
+                    Button(model.recording == .capture ? "请按下新的组合键…（Esc 取消）" : model.shortcut.displayString) {
+                        model.recording == .capture ? model.stopRecordingShortcut() : model.startRecording(.capture)
+                    }
+                }
+                LabeledContent("从剪贴板贴图") {
+                    HStack {
+                        Button(model.recording == .pinClipboard ? "请按下新的组合键…（Esc 取消）" : model.pinShortcut?.displayString ?? "未设置") {
+                            model.recording == .pinClipboard ? model.stopRecordingShortcut() : model.startRecording(.pinClipboard)
+                        }
+                        if model.pinShortcut != nil {
+                            Button("清除") { model.pinShortcut = nil }
+                        }
                     }
                 }
                 LabeledContent("保存位置") {
@@ -122,6 +163,14 @@ struct SettingsView: View {
                     Text("JPG").tag(ImageFormat.jpeg)
                 }
                 .pickerStyle(.segmented)
+                Toggle("完成截图时播放音效", isOn: $model.playSound)
+            }
+
+            Section("通用") {
+                Toggle("登录时启动 Snap", isOn: $model.launchAtLogin)
+                if let error = model.loginItemError {
+                    Text(error).font(.callout).foregroundStyle(.red)
+                }
             }
 
             Section {
@@ -190,6 +239,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        if model.isRecordingShortcut { model.stopRecordingShortcut() }
+        if model.recording != nil { model.stopRecordingShortcut() }
     }
 }

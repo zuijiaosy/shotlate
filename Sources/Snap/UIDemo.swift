@@ -156,6 +156,18 @@ enum UIDemo {
         if let rep = view.exportImage(format: .png), let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: outputDirectory.appendingPathComponent("export.png"))
         }
+
+        // Pin: zoom to 60%, rotate right, and render the pin window's content.
+        if let rep = view.exportImage(format: .png, shadow: false) {
+            let pin = PinWindow(rep: rep, frame: CGRect(x: -5000, y: -5000, width: rep.size.width, height: rep.size.height))
+            pin.setZoom(0.6)
+            pin.rotateRight()
+            if let content = pin.contentView, let out = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                content.cacheDisplay(in: content.bounds, to: out)
+                try? out.representation(using: .png, properties: [:])?.write(to: outputDirectory.appendingPathComponent("pin-rotated.png"))
+                print("Pin frame \(pin.frame.size) zoom \(pin.zoom)")
+            }
+        }
         print("Wrote \(step) steps to \(outputDirectory.path)")
     }
 }
