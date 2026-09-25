@@ -330,7 +330,11 @@ final class CaptureView: NSView {
     private var elementLevel = 0
 
     func setElements(_ nodes: [UIElementNode]) {
-        hierarchy = ElementHierarchy(nodes: nodes)
+        setElements(ElementHierarchy(nodes: nodes))
+    }
+
+    func setElements(_ hierarchy: ElementHierarchy) {
+        self.hierarchy = hierarchy
         primeCursor()
     }
 

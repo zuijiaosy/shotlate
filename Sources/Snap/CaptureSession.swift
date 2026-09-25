@@ -96,7 +96,7 @@ final class CaptureSession {
                 if let area = initialSelection { session.preselect(area) }
                 if let elements {
                     let nodes = await elements.value
-                    if !session.isFinished { session.deliver(elements: nodes) }
+                    if !session.isFinished { await session.deliver(elements: nodes) }
                 }
             } catch {
                 let alert = NSAlert()
@@ -340,14 +340,20 @@ final class CaptureSession {
     }
 
     /// Hands element frames (Cocoa global coordinates) to each screen's view, converted to its flipped local space.
-    func deliver(elements: [UIElementNode]) {
+    /// Frames that don't match the screen's snapshot are left out, checked in the background.
+    @MainActor func deliver(elements: [UIElementNode]) async {
         for (view, window) in zip(views, windows) where view.mode == .screenshot {
             let frame = window.frame
             let local = elements.map { node in
                 UIElementNode(rect: CGRect(x: node.rect.minX - frame.minX, y: frame.maxY - node.rect.maxY,
                                            width: node.rect.width, height: node.rect.height), parent: node.parent)
             }
-            view.setElements(local)
+            let snapshot = view.snapshotImage, scale = CGFloat(snapshot.width) / max(1, frame.width)
+            let hierarchy = await Task.detached(priority: .userInitiated) {
+                PixelBuffer(image: snapshot).map { ElementHierarchy(nodes: local, screenshot: $0, scale: scale) }
+                    ?? ElementHierarchy(nodes: local)
+            }.value
+            if !isFinished, view.mode == .screenshot { view.setElements(hierarchy) }
         }
     }
 

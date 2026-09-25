@@ -770,3 +770,48 @@ import Testing
         #expect(layout.text(for: whole) == "直接选择文字")
     }
 }
+
+@Suite struct ElementVisibilityTests {
+    /// A white 200×200 screen (2 pixels per point), with dark "text" strokes (horizontal bars every 6 px)
+    /// on the rows 40..<60 and 120..<140, spanning x 20..<180.
+    static func page() -> PixelBuffer {
+        let w = 400, h = 400
+        var data = [UInt8](repeating: 255, count: w * h * 4)
+        for y in 0..<h where (80..<120).contains(y) || (240..<280).contains(y) {
+            for x in 40..<360 where y % 6 < 2 {
+                let i = (y * w + x) * 4
+                data[i] = 30; data[i + 1] = 30; data[i + 2] = 30
+            }
+        }
+        // A grey button with a flat fill at 20,160 110×20 (points).
+        for y in 320..<360 { for x in 40..<260 { let i = (y * w + x) * 4; data[i] = 200; data[i + 1] = 200; data[i + 2] = 200 } }
+        return PixelBuffer(width: w, height: h, bytesPerRow: w * 4, data: data)
+    }
+
+    @Test func frameCuttingThroughTextIsRejected() {
+        // A tall strip crossing both text rows, like an invisible web node.
+        #expect(ElementVisibility.cutsThroughContent(CGRect(x: 90, y: 10, width: 30, height: 170), in: Self.page(), scale: 2))
+    }
+
+    @Test func framesOnBlankSpaceOrBordersAreKept() {
+        let page = Self.page()
+        // The paragraph around the first text row, with a little padding.
+        #expect(!ElementVisibility.cutsThroughContent(CGRect(x: 15, y: 35, width: 170, height: 30), in: page, scale: 2))
+        // The button: its edges sit on its fill's border.
+        #expect(!ElementVisibility.cutsThroughContent(CGRect(x: 20, y: 160, width: 110, height: 20), in: page, scale: 2))
+        // Empty space.
+        #expect(!ElementVisibility.cutsThroughContent(CGRect(x: 20, y: 70, width: 100, height: 40), in: page, scale: 2))
+    }
+
+    @Test func hierarchySkipsRejectedFrames() {
+        let nodes = [
+            UIElementNode(rect: CGRect(x: 0, y: 0, width: 200, height: 200), parent: nil),   // 0 page
+            UIElementNode(rect: CGRect(x: 15, y: 35, width: 170, height: 30), parent: 0),    // 1 paragraph
+            UIElementNode(rect: CGRect(x: 90, y: 10, width: 30, height: 170), parent: 0),    // 2 invisible strip
+        ]
+        let hierarchy = ElementHierarchy(nodes: nodes, screenshot: Self.page(), scale: 2)
+        #expect(hierarchy.excluded == [2])
+        #expect(hierarchy.chain(at: CGPoint(x: 100, y: 50), within: nil) == [nodes[1].rect, nodes[0].rect])
+        #expect(hierarchy.chain(at: CGPoint(x: 100, y: 100), within: nil) == [nodes[0].rect])
+    }
+}
