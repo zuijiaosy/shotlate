@@ -11,6 +11,11 @@ enum StyleMemory {
     static var mosaicEffect: MosaicEffect = .pixelate
     static var hexColor = true
     static var lastSelection: [CGDirectDisplayID: CGRect] = [:]
+    /// Locked selection shape, remembered across launches like Snipaste does.
+    static var aspectRatio: AspectRatio? {
+        get { AspectRatio(UserDefaults.standard.string(forKey: "capture.aspectRatio") ?? "") }
+        set { UserDefaults.standard.set(newValue?.label, forKey: "capture.aspectRatio") }
+    }
 
     static func size(for tool: Tool) -> CGFloat { sizes[tool] ?? tool.defaultSize }
     static func areaMode(for tool: Tool) -> MosaicMode { tool == .eraser ? eraserMode : mosaicMode }
@@ -97,7 +102,7 @@ final class CaptureView: NSView {
     private lazy var toolbar = ToolbarView { [unowned self] in self.handle($0) }
     private lazy var styleBar = StyleBarView { [unowned self] in self.applyStyle($0) }
     private lazy var topBar = TopBarView(
-        radius: Double(cornerRadius), shadow: shadowEnabled,
+        radius: Double(cornerRadius), shadow: shadowEnabled, ratio: StyleMemory.aspectRatio,
         onRadius: { [unowned self] in
             self.cornerRadius = CGFloat($0)
             Settings.shared.cornerRadius = $0
@@ -124,6 +129,9 @@ final class CaptureView: NSView {
             addSubview(view)
         }
         magnifier.showHex = StyleMemory.hexColor
+        topBar.onSize = { [unowned self] in self.applyTypedSize($0) }
+        topBar.onRatio = { [unowned self] in self.applyRatio($0) }
+        topBar.onEndEditing = { [unowned self] in self.window?.makeFirstResponder(self) }
         updateHistoryButtons()
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self))
     }
@@ -585,11 +593,16 @@ final class CaptureView: NSView {
             guard didDrag else { return }
             let old = selection
             var end = p
-            if shift {
-                let side = max(abs(p.x - start.x), abs(p.y - start.y))
-                end = clampToBounds(CGPoint(x: start.x + (p.x >= start.x ? side : -side), y: start.y + (p.y >= start.y ? side : -side)))
+            if let ratio = StyleMemory.aspectRatio {
+                selection = SelectionGeometry.clamp(SelectionGeometry.fit(anchor: start, toward: p, ratio: ratio.value), anchor: start, in: bounds)
+                end = CGPoint(x: selection.minX == start.x ? selection.maxX : selection.minX, y: selection.minY == start.y ? selection.maxY : selection.minY)
+            } else {
+                if shift {
+                    let side = max(abs(p.x - start.x), abs(p.y - start.y))
+                    end = clampToBounds(CGPoint(x: start.x + (p.x >= start.x ? side : -side), y: start.y + (p.y >= start.y ? side : -side)))
+                }
+                selection = CGRect(corners: start, end)
             }
-            selection = CGRect(corners: start, end)
             if hoverRect != nil {
                 hoverRect = nil
                 needsDisplay = true
@@ -607,7 +620,12 @@ final class CaptureView: NSView {
             layoutChrome()
         case let .resizing(handle, original, start):
             let old = selection
-            selection = handle.resize(original, by: CGPoint(x: p.x - start.x, y: p.y - start.y)).intersection(bounds)
+            let delta = CGPoint(x: p.x - start.x, y: p.y - start.y)
+            if let ratio = StyleMemory.aspectRatio {
+                selection = resize(original, handle: handle, by: delta, ratio: ratio.value)
+            } else {
+                selection = handle.resize(original, by: delta).intersection(bounds)
+            }
             invalidate(old, selection)
             showMagnifier(at: p, sizeText: sizeText(selection))
             layoutChrome()
@@ -699,6 +717,57 @@ final class CaptureView: NSView {
         let unit: CGFloat = tool.usesAreaModes || tool == .highlighter || tool == .text || tool == .number ? 2 : 1
         let current = currentStyle?.size ?? tool.defaultSize
         applyStyle(.size(current + steps * unit), coalesce: true)
+    }
+
+    /// Resizing with a locked ratio: corners keep the opposite corner fixed, edges keep the top-left fixed.
+    private func resize(_ original: CGRect, handle: ResizeHandle, by d: CGPoint, ratio: CGFloat) -> CGRect {
+        let corners: [ResizeHandle: ResizeHandle] = [.topLeft: .bottomRight, .topRight: .bottomLeft, .bottomLeft: .topRight, .bottomRight: .topLeft]
+        if let opposite = corners[handle] {
+            let anchor = opposite.point(in: original)
+            let dragged = handle.point(in: original)
+            let p = CGPoint(x: dragged.x + d.x, y: dragged.y + d.y)
+            return SelectionGeometry.clamp(SelectionGeometry.fit(anchor: anchor, toward: p, ratio: ratio), anchor: anchor, in: bounds)
+        }
+        let r = handle.resize(original, by: d)
+        return SelectionGeometry.fitEdge(r, ratio: ratio, horizontalEdge: handle == .left || handle == .right, in: bounds)
+    }
+
+    /// A size typed into the top bar: keeps the top-left where possible, moving the selection back inside the screen.
+    private func applyTypedSize(_ size: CGSize) {
+        guard hasSelection else { return }
+        let w = min(size.width, bounds.width), h = min(size.height, bounds.height)
+        var r = CGRect(x: selection.minX, y: selection.minY, width: w, height: h)
+        r.origin.x = min(r.minX, bounds.maxX - w)
+        r.origin.y = min(r.minY, bounds.maxY - h)
+        let old = selection
+        selection = r
+        if let ratio = StyleMemory.aspectRatio, abs(w / h - ratio.value) > 0.01 {
+            // A typed size that breaks the lock turns the lock off rather than silently changing the size.
+            StyleMemory.aspectRatio = nil
+            topBar.setRatio(nil)
+        }
+        invalidate(old, selection)
+        layoutChrome()
+        needsDisplay = true
+    }
+
+    private func applyRatio(_ ratio: AspectRatio?) {
+        StyleMemory.aspectRatio = ratio
+        guard let ratio, hasSelection else {
+            if let ratio { showToast("已锁定 \(ratio.label)", duration: 1) }
+            return
+        }
+        let old = selection
+        selection = SelectionGeometry.fitEdge(selection, ratio: ratio.value, horizontalEdge: true, in: bounds)
+        invalidate(old, selection)
+        layoutChrome()
+        showToast("已锁定 \(ratio.label)", duration: 1)
+    }
+
+    func testing_typeSize(_ size: CGSize) { applyTypedSize(size) }
+    func testing_setRatio(_ ratio: AspectRatio?) {
+        topBar.setRatio(ratio)
+        applyRatio(ratio)
     }
 
     private func selectionHandle(at p: CGPoint) -> ResizeHandle? {
@@ -1154,6 +1223,9 @@ final class CaptureView: NSView {
         if shift, !shiftDown, !magnifier.isHidden, case .none = drag {
             StyleMemory.hexColor.toggle()
             magnifier.showHex = StyleMemory.hexColor
+        topBar.onSize = { [unowned self] in self.applyTypedSize($0) }
+        topBar.onRatio = { [unowned self] in self.applyRatio($0) }
+        topBar.onEndEditing = { [unowned self] in self.window?.makeFirstResponder(self) }
         }
         shiftDown = shift
 

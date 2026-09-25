@@ -1,4 +1,5 @@
 import AppKit
+import SnapCore
 
 /// Scripted behaviour checks that need AppKit (windows, pasteboard, rendering) and so can't live in SnapCore's tests.
 /// Each check prints PASS/FAIL lines and the process exits non-zero if any expectation failed.
@@ -27,6 +28,7 @@ enum FeatureChecks {
         ("pin-thumbnail", pinThumbnail),
         ("pin-groups", pinGroups),
         ("pin-restore", pinRestore),
+        ("selection-size", selectionSize),
     ]
 
     @MainActor
@@ -582,5 +584,35 @@ enum FeatureChecks {
         expect(left.count == 2, "closed pins' images are deleted")
         m.closeAll()
         m.deleteGroup(group)
+    }
+
+    @MainActor static func selectionSize() async {
+        let saved = StyleMemory.aspectRatio
+        defer { StyleMemory.aspectRatio = saved }
+        StyleMemory.aspectRatio = AspectRatio("16:9")
+        let h = CaptureHarness()
+        h.drag(CGPoint(x: 50, y: 50), CGPoint(x: 370, y: 100))
+        expect(h.view.testing_selection == CGRect(x: 50, y: 50, width: 320, height: 180), "16:9 lock shapes the dragged selection (\(String(describing: h.view.testing_selection)))")
+        // Drag the bottom-right handle mostly downwards.
+        h.drag(CGPoint(x: 370, y: 230), CGPoint(x: 380, y: 320))
+        if let r = h.view.testing_selection {
+            expect(abs(r.width / r.height - 16.0 / 9.0) < 0.01 && r.minX == 50 && r.minY == 50, "corner resize keeps the ratio and the opposite corner (\(r))")
+        }
+        h.drag(CGPoint(x: 530, y: 185), CGPoint(x: 610, y: 185)) // right edge handle outward by 80
+        if let r = h.view.testing_selection {
+            expect(abs(r.width - 560) < 0.5 && abs(r.width / r.height - 16.0 / 9.0) < 0.01 && r.minX == 50,
+                   "edge resize grows the other side to keep the ratio (\(r))")
+        }
+        h.screenshot().map { write($0, "selection-ratio.png") }
+
+        h.view.testing_typeSize(CGSize(width: 400, height: 300))
+        expect(h.view.testing_selection?.size == CGSize(width: 400, height: 300), "typed size is applied")
+        expect(StyleMemory.aspectRatio == nil, "a typed size that breaks the lock turns the lock off")
+        h.view.testing_typeSize(CGSize(width: 5000, height: 5000))
+        expect(h.view.testing_selection == CGRect(origin: .zero, size: h.size), "an oversized typed size is limited to the screen")
+        h.view.testing_typeSize(CGSize(width: 300, height: 300))
+        h.view.testing_setRatio(AspectRatio("4:3"))
+        expect(h.view.testing_selection?.size == CGSize(width: 300, height: 225), "choosing a ratio reshapes the current selection")
+        expect(StyleMemory.aspectRatio == AspectRatio("4:3"), "the chosen ratio is remembered")
     }
 }

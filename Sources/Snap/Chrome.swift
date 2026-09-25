@@ -1,4 +1,5 @@
 import AppKit
+import SnapCore
 
 /// Selection blue, matching iShot's selection frame and top bar.
 let selectionBlue = NSColor(srgbRed: 0.16, green: 0.58, blue: 0.93, alpha: 1)
@@ -409,9 +410,15 @@ extension NSColor {
     }
 }
 
-/// Blue bar above the selection: size in points, corner radius slider, shadow toggle.
-final class TopBarView: PanelView {
-    private let sizeLabel = NSTextField(labelWithString: "")
+/// Blue bar above the selection: size in points (editable), aspect ratio lock, corner radius slider, shadow toggle.
+final class TopBarView: PanelView, NSTextFieldDelegate {
+    private let sizeLabel = NSTextField(string: "")
+    private let ratioButton = NSButton(title: "", target: nil, action: nil)
+    private var sizeWidth: NSLayoutConstraint!
+    private(set) var ratio: AspectRatio?
+    var onSize: ((CGSize) -> Void)?
+    var onRatio: ((AspectRatio?) -> Void)?
+    var onEndEditing: (() -> Void)?
     private let radiusIcon = NSImageView(image: symbolImage("square.dashed", size: 11))
     private let slider = NSSlider(value: 0, minValue: 0, maxValue: 30, target: nil, action: nil)
     private let shadowBox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
@@ -419,15 +426,32 @@ final class TopBarView: PanelView {
     private let onRadius: (Double) -> Void
     private let onShadow: (Bool) -> Void
 
-    init(radius: Double, shadow: Bool, onRadius: @escaping (Double) -> Void, onShadow: @escaping (Bool) -> Void) {
+    init(radius: Double, shadow: Bool, ratio: AspectRatio?, onRadius: @escaping (Double) -> Void, onShadow: @escaping (Bool) -> Void) {
         self.onRadius = onRadius
         self.onShadow = onShadow
+        self.ratio = ratio
         super.init(frame: .zero)
         fill = selectionBlue
         self.radius = 6
         layer?.shadowOpacity = 0
         sizeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         sizeLabel.textColor = .white
+        sizeLabel.isBordered = false
+        sizeLabel.drawsBackground = false
+        sizeLabel.focusRingType = .none
+        sizeLabel.isEditable = false
+        sizeLabel.delegate = self
+        sizeLabel.target = self
+        sizeLabel.action = #selector(sizeEntered)
+        sizeLabel.toolTip = "点击输入宽 × 高，回车应用"
+        sizeLabel.cell?.sendsActionOnEndEditing = false
+        sizeWidth = sizeLabel.widthAnchor.constraint(equalToConstant: 80)
+        sizeWidth.isActive = true
+        ratioButton.isBordered = false
+        ratioButton.target = self
+        ratioButton.action = #selector(nextRatio)
+        ratioButton.toolTip = "锁定比例：点击切换 自由 → 1:1 → 4:3 → 3:4 → 16:9 → 9:16 → 3:2 → 2:3"
+        updateRatioTitle()
         radiusIcon.contentTintColor = .white
         radiusIcon.toolTip = "圆角"
         slider.controlSize = .mini
@@ -444,9 +468,10 @@ final class TopBarView: PanelView {
         shadowBox.controlSize = .small
         shadowBox.toolTip = "导出时加投影（仅 PNG）"
 
-        [sizeLabel, radiusIcon, slider, shadowBox].forEach { stack.addArrangedSubview($0) }
+        [sizeLabel, ratioButton, radiusIcon, slider, shadowBox].forEach { stack.addArrangedSubview($0) }
         stack.spacing = 6
-        stack.setCustomSpacing(12, after: sizeLabel)
+        stack.setCustomSpacing(8, after: sizeLabel)
+        stack.setCustomSpacing(12, after: ratioButton)
         stack.setCustomSpacing(12, after: slider)
         stack.edgeInsets = NSEdgeInsets(top: 3, left: 9, bottom: 3, right: 9)
         slider.widthAnchor.constraint(equalToConstant: 72).isActive = true
@@ -461,13 +486,82 @@ final class TopBarView: PanelView {
         NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
     }
 
+    var isEditingSize: Bool { sizeLabel.currentEditor() != nil }
+
     func setSize(_ size: CGSize) {
+        guard !isEditingSize else { return }
         sizeLabel.stringValue = "\(Int(size.width.rounded())) × \(Int(size.height.rounded()))"
+        fitSizeField()
         fit()
     }
 
+    private func fitSizeField() {
+        let text = NSAttributedString(string: sizeLabel.stringValue + "0", attributes: [.font: sizeLabel.font!])
+        sizeWidth.constant = max(60, ceil(text.size().width) + 6)
+    }
+
+    /// Clicking the size starts editing it; only once there is a selection.
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        guard sizeLabel.isEditable, sizeLabel.frame.insetBy(dx: -4, dy: -4).contains(convert(p, to: stack)) else { return }
+        beginEditingSize()
+    }
+
+    func beginEditingSize() {
+        guard sizeLabel.isEditable else { return }
+        window?.makeFirstResponder(sizeLabel)
+        sizeLabel.currentEditor()?.selectAll(nil)
+    }
+
+    @objc private func sizeEntered() {
+        let parsed = SizeText.parse(sizeLabel.stringValue)
+        window?.makeFirstResponder(nil)
+        if let parsed { onSize?(parsed) }
+        onEndEditing?()
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            window?.makeFirstResponder(nil)
+            onEndEditing?()
+            return true
+        }
+        return false
+    }
+
+    @objc private func nextRatio() {
+        let presets = AspectRatio.presets
+        if let ratio, let i = presets.firstIndex(of: ratio) {
+            self.ratio = i + 1 < presets.count ? presets[i + 1] : nil
+        } else {
+            ratio = presets.first
+        }
+        updateRatioTitle()
+        fit()
+        onRatio?(ratio)
+    }
+
+    func setRatio(_ ratio: AspectRatio?) {
+        self.ratio = ratio
+        updateRatioTitle()
+        fit()
+    }
+
+    private func updateRatioTitle() {
+        let title = ratio?.label ?? "自由"
+        ratioButton.image = symbolImage("aspectratio", size: 11)
+        ratioButton.imagePosition = .imageLeading
+        ratioButton.contentTintColor = .white
+        ratioButton.attributedTitle = NSAttributedString(string: title, attributes: [
+            .foregroundColor: NSColor.white.withAlphaComponent(ratio == nil ? 0.75 : 1),
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: ratio == nil ? .regular : .bold),
+        ])
+    }
+
     func setControlsVisible(_ visible: Bool) {
+        sizeLabel.isEditable = visible
         guard slider.isHidden == visible else { return }
+        ratioButton.isHidden = !visible
         radiusIcon.isHidden = !visible
         slider.isHidden = !visible
         shadowBox.isHidden = !visible

@@ -380,3 +380,45 @@ import Testing
         #expect(FileNameTemplate.expand("  ", date: date, appName: nil, timeZone: utc) == "Snap")
     }
 }
+
+@Suite struct SelectionGeometryTests {
+    @Test func parsesSizes() {
+        #expect(SizeText.parse("800x600") == CGSize(width: 800, height: 600))
+        #expect(SizeText.parse(" 1280 × 720 ") == CGSize(width: 1280, height: 720))
+        #expect(SizeText.parse("300*200") == CGSize(width: 300, height: 200))
+        #expect(SizeText.parse("300, 200") == CGSize(width: 300, height: 200))
+        #expect(SizeText.parse("300") == nil)
+        #expect(SizeText.parse("0x10") == nil)
+        #expect(SizeText.parse("abc") == nil)
+    }
+
+    @Test func parsesRatios() {
+        #expect(abs((AspectRatio("16:9")?.value ?? 0) - 16.0 / 9.0) < 1e-9)
+        #expect(AspectRatio("3/4")?.label == "3:4")
+        #expect(AspectRatio("0:4") == nil)
+        #expect(AspectRatio.presets.count == 7)
+    }
+
+    @Test func fitsRatioInAnyDirection() {
+        let a = CGPoint(x: 100, y: 100)
+        #expect(SelectionGeometry.fit(anchor: a, toward: CGPoint(x: 260, y: 130), ratio: 16.0 / 9.0) == CGRect(x: 100, y: 100, width: 160, height: 90))
+        // Mostly vertical drag: height drives.
+        #expect(SelectionGeometry.fit(anchor: a, toward: CGPoint(x: 110, y: 190), ratio: 1) == CGRect(x: 100, y: 100, width: 90, height: 90))
+        // Up and to the left.
+        #expect(SelectionGeometry.fit(anchor: a, toward: CGPoint(x: 20, y: 80), ratio: 2) == CGRect(x: 20, y: 60, width: 80, height: 40))
+    }
+
+    @Test func clampsKeepingRatioAndAnchor() {
+        let bounds = CGRect(x: 0, y: 0, width: 500, height: 300)
+        let r = SelectionGeometry.clamp(CGRect(x: 400, y: 100, width: 200, height: 100), anchor: CGPoint(x: 400, y: 100), in: bounds)
+        #expect(r == CGRect(x: 400, y: 100, width: 100, height: 50))
+    }
+
+    @Test func edgeResizeFollowsRatio() {
+        let bounds = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+        #expect(SelectionGeometry.fitEdge(CGRect(x: 10, y: 10, width: 320, height: 50), ratio: 16.0 / 9.0, horizontalEdge: true, in: bounds)
+            == CGRect(x: 10, y: 10, width: 320, height: 180))
+        #expect(SelectionGeometry.fitEdge(CGRect(x: 10, y: 10, width: 50, height: 300), ratio: 0.75, horizontalEdge: false, in: bounds)
+            == CGRect(x: 10, y: 10, width: 225, height: 300))
+    }
+}
