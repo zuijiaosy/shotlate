@@ -9,7 +9,7 @@ final class CaptureHarness {
     let size: CGSize
 
     /// A 2x canvas: light grey with a white card, black text lines and a dark band, so tools show up on varied pixels.
-    init(size: CGSize = CGSize(width: 800, height: 500), windowRects: [CGRect] = [], cursor: CapturedCursor? = nil) {
+    init(size: CGSize = CGSize(width: 800, height: 500), windowRects: [CGRect] = [], cursor: CapturedCursor? = nil, lines: [String]? = nil) {
         self.size = size
         let scale: CGFloat = 2
         let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
@@ -25,8 +25,9 @@ final class CaptureHarness {
         CGRect(origin: .zero, size: size).fill()
         NSColor.white.setFill()
         CGRect(x: 60, y: 60, width: 520, height: 300).fill()
-        for i in 0..<6 {
-            NSAttributedString(string: "Line \(i + 1): The quick brown fox jumps over the lazy dog 1234567890",
+        let texts = lines ?? (0..<6).map { "Line \($0 + 1): The quick brown fox jumps over the lazy dog 1234567890" }
+        for (i, text) in texts.enumerated() {
+            NSAttributedString(string: text,
                                attributes: [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.black])
                 .draw(at: CGPoint(x: 80, y: 80 + CGFloat(i) * 28))
         }

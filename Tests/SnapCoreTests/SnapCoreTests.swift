@@ -616,3 +616,27 @@ import Testing
         #expect(d.update(CGPoint(x: 1, y: 1), screens: screens, now: t0.addingTimeInterval(0.35)) == nil)
     }
 }
+
+@Suite struct SensitiveTextTests {
+    func kinds(_ s: String) -> [SensitiveText.Kind] { SensitiveText.matches(in: s).map(\.kind) }
+    func texts(_ s: String) -> [String] { SensitiveText.matches(in: s).map { String(s[$0.range]) } }
+
+    @Test func findsPhonesAndEmails() {
+        #expect(texts("联系人：张三 13812345678，邮箱 zhang.san@example.com") == ["13812345678", "zhang.san@example.com"])
+        #expect(texts("电话 +86 138-1234-5678") == ["+86 138-1234-5678"])
+        #expect(kinds("Call +1 415-555-0132 now") == [.phone])
+    }
+
+    @Test func findsIDsCardsAndSecrets() {
+        #expect(kinds("身份证 11010519491231002X") == [.idCard])
+        #expect(kinds("卡号 6222 0202 0000 0000 008") == [])        // fails Luhn
+        #expect(kinds("Visa 4111 1111 1111 1111") == [.bankCard])   // passes Luhn
+        #expect(kinds("OPENAI_API_KEY=sk-proj_abcdefghijklmnopqrstuv") == [.secret])
+        #expect(kinds("AWS AKIAIOSFODNN7EXAMPLE") == [.secret])
+    }
+
+    @Test func leavesOrdinaryNumbersAlone() {
+        #expect(kinds("订单 20260925153000，共 3 件，合计 128.50 元") == [])
+        #expect(kinds("版本 2.11.3 于 2026-01-18 发布") == [])
+    }
+}

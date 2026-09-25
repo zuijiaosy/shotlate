@@ -162,7 +162,7 @@ private func separator(height: CGFloat = 18) -> NSView {
 }
 
 enum ToolbarAction {
-    case tool(Tool), undo, redo, ocr, translate, pin, longCapture, cancel, save, share, done
+    case tool(Tool), undo, redo, ocr, translate, redact, pin, longCapture, cancel, save, share, done
 }
 
 /// Bottom toolbar: annotation tools | undo, redo | OCR, translate | cancel, save, done.
@@ -196,6 +196,7 @@ final class ToolbarView: PanelView {
         stack.addArrangedSubview(ChromeButton(image: badgeImage("OCR"), tooltip: "识别文字  X") { handler(.ocr) })
         translateButton = ChromeButton(image: symbolImage("translate"), tooltip: "翻译到原位  Y\n再按一次切换原文，按住 ⌥ 临时查看原文") { handler(.translate) }
         stack.addArrangedSubview(translateButton)
+        stack.addArrangedSubview(ChromeButton(image: symbolImage("eye.slash"), tooltip: "智能打码  B\n自动遮住手机号、邮箱、身份证号、银行卡号和密钥") { handler(.redact) })
         addSeparator()
         stack.addArrangedSubview(ChromeButton(image: symbolImage("pin"), tooltip: "贴到屏幕上  ⌘T") { handler(.pin) })
         stack.addArrangedSubview(ChromeButton(image: symbolImage("arrow.up.and.down.text.horizontal"), tooltip: "长截图  S\n在选区里滚动，自动拼接成长图") { handler(.longCapture) })

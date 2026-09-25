@@ -1438,6 +1438,8 @@ final class CaptureView: NSView {
             handle(.ocr)
         } else if key == "y" {
             handle(.translate)
+        } else if key == "b" {
+            handle(.redact)
         } else if key == "s" {
             handle(.longCapture)
         }
@@ -1643,6 +1645,8 @@ final class CaptureView: NSView {
             runOCR()
         case .translate:
             runTranslation()
+        case .redact:
+            runRedaction()
         case .pin:
             if mode == .pinEdit { finish(.apply) } else { pinSelection() }
         case .longCapture:
@@ -1707,6 +1711,39 @@ final class CaptureView: NSView {
                 toast.hide()
             } catch {
                 showToast("文字识别失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Covers personal data and secrets found by OCR with mosaic boxes, as one undoable step.
+    private func runRedaction() {
+        guard recognitionTask == nil else { return }
+        showToast("正在查找敏感信息…", duration: nil)
+        recognitionTask = Task { @MainActor in
+            defer { recognitionTask = nil }
+            do {
+                let result = try await recognize()
+                // Skip what is already covered, so pressing B twice doesn't stack boxes.
+                let covered = items.compactMap { item -> CGRect? in
+                    if case let .mosaicRect(r) = item.shape { return r }
+                    return nil
+                }
+                let regions = result.sensitive.filter { region in !covered.contains { $0.contains(region.rect.insetBy(dx: 2, dy: 1)) } }
+                guard !regions.isEmpty else {
+                    showToast(result.sensitive.isEmpty ? "没有找到手机号、邮箱、证件号、卡号或密钥" : "敏感信息都已经打码了")
+                    return
+                }
+                mutate {
+                    for region in regions {
+                        let box = region.rect.insetBy(dx: -3, dy: -2).intersection(selection)
+                        items.append(AnnotationItem(shape: .mosaicRect(box), color: .black, size: 12, effect: .pixelate))
+                    }
+                }
+                let counts = Dictionary(grouping: regions, by: \.kind).map { "\($0.key.rawValue) \($0.value.count)" }.sorted()
+                showToast("已打码 \(regions.count) 处：\(counts.joined(separator: "、")) · ⌘Z 撤销", duration: 3)
+                needsDisplay = true
+            } catch {
+                showToast("识别失败：\(error.localizedDescription)")
             }
         }
     }

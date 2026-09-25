@@ -51,6 +51,7 @@ enum FeatureChecks {
         ("print", printing),
         ("loupe", loupe),
         ("hot-corners", hotCorners),
+        ("redact", redact),
     ]
 
     @MainActor
@@ -1291,5 +1292,35 @@ enum FeatureChecks {
         HotCornerMonitor.shared.run(.bottomLeft)
         expect(pin.isVisible, "a corner without a command does nothing")
         m.closeAll()
+    }
+
+    @MainActor static func redact() async {
+        let h = CaptureHarness(lines: [
+            "客户：张三  电话 13812345678",
+            "邮箱：zhang.san@example.com",
+            "订单号 20260925153000  金额 128.50",
+            "OPENAI_API_KEY=sk-proj_abcdefghijklmnop123",
+        ])
+        h.select(CGRect(x: 60, y: 60, width: 520, height: 160))
+        h.key("b", code: 11)
+        for _ in 0..<400 where !(h.view.testing_items.contains { if case .mosaicRect = $0.shape { return true }; return false }) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let boxes = h.view.testing_items.compactMap { item -> CGRect? in
+            if case let .mosaicRect(r) = item.shape { return r }
+            return nil
+        }
+        expect(boxes.count == 3, "covers the phone number, email and API key (\(boxes.count) boxes: \(boxes.map(\.integral)))")
+        // Line 1 is at y≈80-97; the phone number is the right part of it, "客户：张三" on the left stays readable.
+        expect(boxes.contains { $0.minY < 90 && $0.maxY > 90 && $0.minX > 150 }, "the phone box covers just the number, not the whole line")
+        expect(!boxes.contains { $0.minY < 146 && $0.maxY > 146 }, "the order number line is left alone")
+        h.key("b", code: 11)
+        try? await Task.sleep(for: .milliseconds(300))
+        let again = h.view.testing_items.filter { if case .mosaicRect = $0.shape { return true }; return false }.count
+        expect(again == boxes.count, "pressing B again doesn't stack more boxes")
+        h.key("z", code: 6, flags: .command)
+        expect(h.view.testing_items.isEmpty, "one ⌘Z removes all the boxes")
+        h.key("z", code: 6, flags: [.command, .shift])
+        h.export().map { write($0, "redact.png") }
     }
 }

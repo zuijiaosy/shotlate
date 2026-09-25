@@ -2,9 +2,16 @@ import AppKit
 import SnapCore
 import Vision
 
+/// A piece of personal data or a secret found by OCR, with the box around just that text.
+struct SensitiveRegion {
+    var kind: SensitiveText.Kind
+    var rect: CGRect
+}
+
 struct RecognitionResult {
     var lines: [OCRLine]
     var codes: [String]
+    var sensitive: [SensitiveRegion] = []
 
     /// Recognized text in reading order: one line per OCR line, paragraphs kept together.
     var plainText: String {
@@ -42,13 +49,19 @@ enum TextRecognizer {
             let barcodeRequest = VNDetectBarcodesRequest()
             try VNImageRequestHandler(cgImage: image).perform([textRequest, barcodeRequest])
 
+            var sensitive: [SensitiveRegion] = []
             let lines = (textRequest.results ?? []).compactMap { observation -> OCRLine? in
                 guard let candidate = observation.topCandidates(1).first else { return nil }
+                for match in SensitiveText.matches(in: candidate.string) {
+                    // Vision can box a substring, so only the matching characters get covered, not the whole line.
+                    let box = (try? candidate.boundingBox(for: match.range))?.boundingBox ?? observation.boundingBox
+                    sensitive.append(SensitiveRegion(kind: match.kind, rect: VisionGeometry.rect(fromNormalized: box, in: selection)))
+                }
                 return OCRLine(text: candidate.string,
                                rect: VisionGeometry.rect(fromNormalized: observation.boundingBox, in: selection))
             }
             let codes = (barcodeRequest.results ?? []).compactMap(\.payloadStringValue)
-            return RecognitionResult(lines: lines, codes: codes)
+            return RecognitionResult(lines: lines, codes: codes, sensitive: sensitive)
         }.value
     }
 }
