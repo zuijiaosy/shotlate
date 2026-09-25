@@ -530,3 +530,31 @@ import Testing
         #expect(Automation.parse(command: "") == nil)
     }
 }
+
+@Suite struct SnappingTests {
+    let other = CGRect(x: 100, y: 100, width: 200, height: 100)
+
+    @Test func snapsSideBySide() {
+        // Dropped 8pt right of the other rect's right edge, a bit lower: sticks to the edge and aligns the top.
+        let r = Snapping.snap(CGRect(x: 308, y: 105, width: 50, height: 50), to: [other])
+        #expect(r == CGRect(x: 300, y: 100, width: 50, height: 50))
+    }
+
+    @Test func leavesFarAwayRectsAlone() {
+        let far = CGRect(x: 600, y: 400, width: 50, height: 50)
+        #expect(Snapping.snap(far, to: [other]) == far)
+        // Edge within reach horizontally, but vertically nowhere near: no snap.
+        let apart = CGRect(x: 305, y: 500, width: 50, height: 50)
+        #expect(Snapping.snap(apart, to: [other]) == apart)
+    }
+
+    @Test func snapsInsideScreenEdges() {
+        let screen = CGRect(x: 0, y: 0, width: 1000, height: 800)
+        #expect(Snapping.snap(CGRect(x: 5, y: 790 - 60, width: 100, height: 60), to: [screen]).origin == CGPoint(x: 0, y: 740))
+    }
+
+    @Test func picksTheNearestEdge() {
+        let a = CGRect(x: 100, y: 0, width: 10, height: 100), b = CGRect(x: 0, y: 0, width: 103, height: 100)
+        #expect(Snapping.snap(CGRect(x: 104, y: 10, width: 20, height: 20), to: [a, b]).minX == 103)
+    }
+}

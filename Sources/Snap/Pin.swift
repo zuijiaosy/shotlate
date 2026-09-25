@@ -135,6 +135,38 @@ final class PinManager {
         refreshVisibility()
     }
 
+    // MARK: Multi-selection
+
+    /// Pins picked with ⌘-click or ⌘A; moving, opacity and ⌘W then act on all of them.
+    private(set) var selection: [PinWindow] = []
+
+    func isSelected(_ pin: PinWindow) -> Bool { selection.contains { $0 === pin } }
+
+    func toggleSelection(_ pin: PinWindow) {
+        if isSelected(pin) { selection.removeAll { $0 === pin } } else { selection.append(pin) }
+        refreshBorders()
+    }
+
+    func selectAllShown() {
+        selection = pins.filter(isShown)
+        refreshBorders()
+    }
+
+    func clearSelection() {
+        guard !selection.isEmpty else { return }
+        selection = []
+        refreshBorders()
+    }
+
+    /// The pins an action on `pin` applies to: the whole selection if `pin` is part of it.
+    func targets(for pin: PinWindow) -> [PinWindow] {
+        isSelected(pin) && selection.count > 1 ? selection : [pin]
+    }
+
+    private func refreshBorders() {
+        for pin in pins { pin.testing_view.needsDisplay = true }
+    }
+
     // MARK: Solo
 
     func toggleSolo(_ pin: PinWindow) {
@@ -218,6 +250,7 @@ final class PinManager {
 
     fileprivate func didClose(_ pin: PinWindow, keepInHistory: Bool) {
         pins.removeAll { $0 === pin }
+        selection.removeAll { $0 === pin }
         if soloPin === pin || soloPin == nil {
             soloPin = nil
             refreshVisibility()
@@ -374,7 +407,8 @@ final class PinWindow: NSPanel {
         let steps = scrollAccumulator.rounded(.towardZero)
         scrollAccumulator -= steps
         if event.modifierFlags.contains(.option) {
-            setOpacity(alphaValue + steps * 0.05)
+            let value = alphaValue + steps * 0.05
+            for pin in PinManager.shared.targets(for: self) { pin.setOpacity(value) }
         } else {
             setZoom(zoom * pow(1.1, steps), anchor: NSEvent.mouseLocation)
         }
@@ -388,7 +422,11 @@ final class PinWindow: NSPanel {
         let arrows: [UInt16: CGPoint] = [123: CGPoint(x: -1, y: 0), 124: CGPoint(x: 1, y: 0), 125: CGPoint(x: 0, y: -1), 126: CGPoint(x: 0, y: 1)]
         if event.keyCode == 53 && flags == .shift {
             destroy()
-        } else if event.keyCode == 53 || (flags == .command && key == "w") {
+        } else if flags == .command && key == "w" {
+            for pin in PinManager.shared.targets(for: self) { pin.close(keepInHistory: true) }
+        } else if flags == .command && key == "a" {
+            PinManager.shared.selectAllShown()
+        } else if event.keyCode == 53 {
             close(keepInHistory: true)
         } else if flags.isEmpty, key == " " {
             annotate()
@@ -717,7 +755,8 @@ final class PinView: NSView {
     /// Region of the image to show while collapsed, in image points (top-left origin).
     var thumbnail: CGRect? { didSet { needsDisplay = true } }
     private let label = ToastView()
-    private var dragStart: (mouse: CGPoint, origin: CGPoint)?
+    /// Where the drag started, and every window moving along (the multi-selection) with its starting origin.
+    private var dragStart: (mouse: CGPoint, windows: [(NSWindow, CGPoint)])?
     /// Right-drag box that becomes a thumbnail, in view points.
     private var regionStart: CGPoint?
     private var region: CGRect? { didSet { needsDisplay = true } }
@@ -726,6 +765,17 @@ final class PinView: NSView {
         super.init(frame: frame)
         wantsLayer = true
         addSubview(label)
+        registerForDraggedTypes([.fileURL, .URL, .png, .tiff, .string])
+    }
+
+    // MARK: Drop
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { .copy }
+
+    /// An image, image file or image link dropped on a pin replaces its picture.
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let pin = window_ else { return false }
+        return PinDrop.accept(sender.draggingPasteboard, into: pin)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -764,7 +814,7 @@ final class PinView: NSView {
             selectionBlue.setStroke()
             path.stroke()
         }
-        let active = window_?.isKeyWindow ?? false
+        let active = (window_?.isKeyWindow ?? false) || (window_.map { PinManager.shared.isSelected($0) } ?? false)
         let color: NSColor = passthrough ? .systemGreen : active ? selectionBlue : NSColor.gray.withAlphaComponent(0.5)
         color.setStroke()
         let border = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
@@ -791,13 +841,40 @@ final class PinView: NSView {
             }
             return
         }
-        dragStart = (NSEvent.mouseLocation, window?.frame.origin ?? .zero)
+        guard let pin = window_ else { return }
+        if event.modifierFlags.contains(.command) {
+            PinManager.shared.toggleSelection(pin)
+        } else if !PinManager.shared.isSelected(pin) {
+            PinManager.shared.clearSelection()
+        }
+        let moving = PinManager.shared.targets(for: pin)
+        dragStart = (NSEvent.mouseLocation, moving.map { ($0, $0.frame.origin) })
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let dragStart, let window else { return }
-        let m = NSEvent.mouseLocation
-        window.setFrameOrigin(CGPoint(x: dragStart.origin.x + m.x - dragStart.mouse.x, y: dragStart.origin.y + m.y - dragStart.mouse.y))
+        drag(to: NSEvent.mouseLocation, snapping: event.modifierFlags.contains(.shift))
+    }
+
+    /// Moves the dragged pins; with ⇧ this pin's edges stick to other pins, windows and the screen edges.
+    func drag(to mouse: CGPoint, snapping: Bool) {
+        guard let dragStart, let window, let own = dragStart.windows.first(where: { $0.0 === window }) else { return }
+        var d = CGPoint(x: mouse.x - dragStart.mouse.x, y: mouse.y - dragStart.mouse.y)
+        if snapping {
+            let proposed = CGRect(origin: CGPoint(x: own.1.x + d.x, y: own.1.y + d.y), size: window.frame.size)
+            let moving = Set(dragStart.windows.map { ObjectIdentifier($0.0) })
+            var targets = PinManager.shared.pins.filter { $0.isVisible && !moving.contains(ObjectIdentifier($0)) }.map(\.frame)
+            targets += NSScreen.screens.map(\.visibleFrame)
+            targets += CaptureEngine.windowFrames()
+            let snapped = Snapping.snap(proposed, to: targets)
+            d = CGPoint(x: d.x + snapped.minX - proposed.minX, y: d.y + snapped.minY - proposed.minY)
+        }
+        for (w, origin) in dragStart.windows { w.setFrameOrigin(CGPoint(x: origin.x + d.x, y: origin.y + d.y)) }
+    }
+
+    func testing_beginDrag(at mouse: CGPoint, command: Bool = false) {
+        guard let pin = window_ else { return }
+        if command { PinManager.shared.toggleSelection(pin) } else if !PinManager.shared.isSelected(pin) { PinManager.shared.clearSelection() }
+        dragStart = (mouse, PinManager.shared.targets(for: pin).map { ($0, $0.frame.origin) })
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -874,5 +951,40 @@ enum PinBackground: Int, CaseIterable, Codable {
         case .lightChecker: return (NSColor(white: 1, alpha: 1), NSColor(white: 0.85, alpha: 1))
         case .darkChecker: return (NSColor(white: 0.2, alpha: 1), NSColor(white: 0.3, alpha: 1))
         }
+    }
+}
+
+/// Replacing a pin's picture with something dropped on it.
+enum PinDrop {
+    static let maxDownloadBytes = 20 * 1024 * 1024
+
+    @discardableResult
+    static func accept(_ pasteboard: NSPasteboard, into pin: PinWindow, download: @escaping (URL) async -> Data? = fetch) -> Bool {
+        let hasImage = pasteboard.canReadItem(withDataConformingToTypes: ["public.image"])
+        let hasFile = !((pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []).isEmpty
+        if !hasImage, !hasFile, let url = (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first,
+           ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            // A browser link to an image without the image data: fetch it.
+            pin.testing_view.flash("正在下载图片…")
+            Task { @MainActor in
+                guard let data = await download(url), let image = NSImage(data: data), let rep = ClipboardPinSource.bitmap(from: image) else {
+                    pin.testing_view.flash("无法下载这张图片")
+                    return
+                }
+                pin.replaceImage(rep)
+                pin.sourceText = url.absoluteString
+            }
+            return true
+        }
+        guard let content = ClipboardPinSource.read(pasteboard, scale: pin.backingScaleFactor).first else { return false }
+        pin.replaceImage(content.rep)
+        pin.sourceText = content.text
+        return true
+    }
+
+    static func fetch(_ url: URL) async -> Data? {
+        guard let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode ?? 200 < 400, data.count <= maxDownloadBytes else { return nil }
+        return data
     }
 }

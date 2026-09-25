@@ -46,6 +46,7 @@ enum FeatureChecks {
         ("hotkeys", hotkeys),
         ("magnifier", magnifierTool),
         ("pin-filters", pinFilters),
+        ("pin-multi", pinMulti),
     ]
 
     @MainActor
@@ -1157,5 +1158,53 @@ enum FeatureChecks {
             expect(p.alphaComponent > 0.99 && p.brightnessComponent < 0.4, "see-through parts show the dark checkerboard")
         }
         PinManager.shared.closeAll()
+    }
+
+    @MainActor static func pinMulti() async {
+        let m = PinManager.shared
+        m.closeAll()
+        let a = m.pin(sampleRep(), frame: CGRect(x: -4000, y: -4000, width: 120, height: 80))
+        let b = m.pin(sampleRep(), frame: CGRect(x: -3800, y: -4000, width: 120, height: 80))
+        let c = m.pin(sampleRep(), frame: CGRect(x: -3600, y: -4000, width: 120, height: 80))
+        a.testing_view.testing_beginDrag(at: .zero, command: true)
+        b.testing_view.testing_beginDrag(at: .zero, command: true)
+        expect(m.selection.count == 2, "⌘-click selects two pins")
+        b.testing_view.drag(to: CGPoint(x: 30, y: 40), snapping: false)
+        expect(a.frame.origin == CGPoint(x: -3970, y: -3960) && b.frame.origin == CGPoint(x: -3770, y: -3960) && c.frame.origin == CGPoint(x: -3600, y: -4000),
+               "dragging one selected pin moves the whole selection only")
+        let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -4, wheel2: 0, wheel3: 0)!
+        wheel.flags = .maskAlternate
+        a.scrollWheel(with: NSEvent(cgEvent: wheel)!)
+        expect(abs(a.alphaValue - 0.8) < 0.01 && abs(b.alphaValue - 0.8) < 0.01 && c.alphaValue == 1, "⌥ + wheel changes the selection's opacity")
+        key(c, "a", code: 0, flags: .command)
+        expect(m.selection.count == 3, "⌘A selects every visible pin")
+        key(a, "w", code: 13, flags: .command)
+        expect(m.pins.isEmpty, "⌘W closes the whole selection")
+
+        // ⇧-drag: the right pin sticks to the left pin's right edge.
+        let left = m.pin(sampleRep(), frame: CGRect(x: -4000, y: -4000, width: 120, height: 80))
+        let right = m.pin(sampleRep(), frame: CGRect(x: -3700, y: -3995, width: 120, height: 80))
+        right.testing_view.testing_beginDrag(at: .zero)
+        right.testing_view.drag(to: CGPoint(x: -172, y: 0), snapping: true) // lands at x -3872, 8pt from -3880
+        expect(right.frame.minX == left.frame.maxX && right.frame.minY == left.frame.minY, "⇧-drag snaps to the neighbour's edge (\(right.frame))")
+        right.testing_view.testing_beginDrag(at: .zero)
+        right.testing_view.drag(to: CGPoint(x: 8, y: 0), snapping: false)
+        expect(right.frame.minX == left.frame.maxX + 8, "without ⇧ there is no snapping")
+
+        // Drops.
+        let pb = NSPasteboard(name: NSPasteboard.Name("app.snap.drop"))
+        pb.clearContents()
+        let file = outputDirectory.appendingPathComponent("drop.png")
+        try? sampleRep(CGSize(width: 60, height: 50), color: .systemRed).representation(using: .png, properties: [:])?.write(to: file)
+        pb.writeObjects([file as NSURL])
+        PinDrop.accept(pb, into: left)
+        expect(left.rep.size == CGSize(width: 60, height: 50) && left.frame.size == CGSize(width: 60, height: 50), "a dropped image file replaces the picture")
+        pb.clearContents()
+        pb.writeObjects([URL(string: "https://example.com/cat.png")! as NSURL])
+        let png = sampleRep(CGSize(width: 30, height: 30), color: .systemBlue).representation(using: .png, properties: [:])!
+        PinDrop.accept(pb, into: right) { _ in png }
+        for _ in 0..<50 where right.sourceText == nil { try? await Task.sleep(for: .milliseconds(20)) }
+        expect(right.sourceText == "https://example.com/cat.png" && right.rep.pixelsWide == 60, "a dropped image link is downloaded into the pin")
+        m.closeAll()
     }
 }
