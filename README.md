@@ -8,6 +8,14 @@
 
 官网：[shotlate.workers.dev](https://shotlate.workers.dev) · 下载：[最新版本](https://github.com/zuijiaosy/shotlate/releases/latest)
 
+![一次完整的截图：悬停选中窗口，框选，画框、箭头和序号，最后按 X 识别文字](docs/images/capture-flow.gif)
+
+一次完整的截图：悬停选中窗口，框选，画框、箭头和序号，最后按 X 识别文字。画面由 Shotlate 的截图界面直接渲染。
+
+<img src="docs/images/settings.gif" width="680" alt="设置界面：左侧快捷键、保存、翻译、通用四个分类，改动立即生效">
+
+设置界面：左侧四个分类，改动立即生效。
+
 ## 构建
 
 只需要安装 Command Line Tools，不需要 Xcode。
@@ -109,6 +117,8 @@ scripts/make-dmg.sh 0.1.0                   # 打包成 build/Shotlate-0.1.0.dmg
 ## 设置
 
 菜单栏 Shotlate → 设置：左侧是「快捷键 / 保存 / 翻译 / 通用」四个分类，右侧是对应的选项。改动立即生效，没有保存按钮。
+
+- 截图流程的 GIF 和设置界面的 GIF 放在 `docs/images/`。前者由官网的 `capture-flow.mp4` 转成；后者来自 `Shotlate --check hotkeys` 离屏渲染的各个设置页。
 
 - **快捷键**：截图、从剪贴板贴图、隐藏贴图和扫码的全局快捷键。
 - **保存**：保存位置和格式。
