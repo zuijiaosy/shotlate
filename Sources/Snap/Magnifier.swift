@@ -7,7 +7,6 @@ final class MagnifierView: NSView {
     /// Screen pixels across the zoom area (odd, so one sits in the middle) and the points each one takes.
     let cells: Int
     let cellSize: CGFloat
-    let showGrid: Bool
     var zoomSide: CGFloat { CGFloat(cells) * cellSize }
 
     private let snapshot: CGImage
@@ -18,13 +17,12 @@ final class MagnifierView: NSView {
     var sizeText: String? { didSet { needsDisplay = true } }
     private var position = CGPoint.zero
 
-    init(snapshot: CGImage, viewSize: CGSize, zoom: Int = Settings.shared.magnifierZoom, grid: Bool = Settings.shared.magnifierGrid) {
+    init(snapshot: CGImage, viewSize: CGSize) {
         self.snapshot = snapshot
         pointsPerPixel = viewSize.width / CGFloat(snapshot.width)
-        cellSize = CGFloat(max(2, zoom))
+        cellSize = 8
         cells = Int(120 / cellSize) | 1
-        showGrid = grid
-        super.init(frame: CGRect(x: 0, y: 0, width: CGFloat(Int(120 / CGFloat(max(2, zoom))) | 1) * CGFloat(max(2, zoom)), height: 0))
+        super.init(frame: .zero)
         setFrameSize(CGSize(width: zoomSide, height: zoomSide + Self.infoHeight))
         wantsLayer = true
         layer?.shadowColor = NSColor.black.cgColor
@@ -113,8 +111,8 @@ final class MagnifierView: NSView {
         CGRect(x: center, y: 0, width: cell, height: side).fill()
 
         // Faint pixel grid.
-        NSColor.white.withAlphaComponent(showGrid ? 0.07 : 0).setFill()
-        for i in 1..<cells where showGrid {
+        NSColor.white.withAlphaComponent(0.07).setFill()
+        for i in 1..<cells {
             CGRect(x: CGFloat(i) * cell, y: 0, width: 0.5, height: side).fill()
             CGRect(x: 0, y: CGFloat(i) * cell, width: side, height: 0.5).fill()
         }
@@ -159,9 +157,6 @@ final class MagnifierView: NSView {
 final class TextEditorView: NSTextView {
     var onCommit: () -> Void = {}
     var onResize: () -> Void = {}
-    /// Set for a number's caption: while it is still empty, shortcuts go to the capture view instead,
-    /// so Enter, Delete, arrows and ⌘ keys keep working right after placing a number.
-    var onEmptyShortcut: ((NSEvent) -> Void)?
     private(set) var wrapWidth: CGFloat
 
     init(origin: CGPoint, wrapWidth: CGFloat, color: NSColor, size: CGFloat) {
@@ -215,21 +210,7 @@ final class TextEditorView: NSTextView {
         onResize()
     }
 
-    private func passesThrough(_ event: NSEvent) -> Bool {
-        guard let onEmptyShortcut, string.isEmpty, !hasMarkedText() else { return false }
-        let shortcutKeys: Set<UInt16> = [36, 76, 51, 117, 123, 124, 125, 126]
-        guard event.modifierFlags.contains(.command) || shortcutKeys.contains(event.keyCode) else { return false }
-        onEmptyShortcut(event)
-        return true
-    }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if window?.firstResponder === self, event.type == .keyDown, passesThrough(event) { return true }
-        return super.performKeyEquivalent(with: event)
-    }
-
     override func keyDown(with event: NSEvent) {
-        if passesThrough(event) { return }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if event.keyCode == 53 || ((event.keyCode == 36 || event.keyCode == 76) && flags == .command) {
             onCommit()

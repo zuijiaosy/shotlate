@@ -64,26 +64,6 @@ enum ImageFormat: String, CaseIterable, Identifiable {
     var fileExtension: String { self == .png ? "png" : "jpg" }
 }
 
-/// A user-defined global shortcut that runs a snap:// link or a Snipaste-style command.
-struct CustomCommand: Codable, Equatable, Identifiable {
-    var id = UUID()
-    var name: String
-    var command: String
-    var shortcut: Shortcut?
-
-    static let presets: [CustomCommand] = [
-        CustomCommand(name: "截取全屏并复制", command: "snip --full -o clipboard"),
-        CustomCommand(name: "截取上次区域并复制", command: "snip --last -o clipboard"),
-        CustomCommand(name: "截取当前窗口并复制", command: "snip --active-window -o clipboard"),
-        CustomCommand(name: "截图后直接贴图", command: "snip -o pin"),
-        CustomCommand(name: "3 秒后截图", command: "snip --delay 3"),
-        CustomCommand(name: "白板", command: "whiteboard"),
-        CustomCommand(name: "透明白板", command: "transparent-whiteboard"),
-        CustomCommand(name: "回放上一次截图", command: "snap://history"),
-        CustomCommand(name: "下一个贴图分组", command: "switch-group"),
-    ]
-}
-
 /// App settings. Everything lives in UserDefaults except the API key, which goes to the Keychain.
 final class Settings {
     static let shared = Settings()
@@ -122,7 +102,7 @@ final class Settings {
     var saveDirectory: URL {
         get {
             if let path = defaults.string(forKey: "output.directory") { return URL(fileURLWithPath: path) }
-            return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures/Snap")
+            return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
         }
         set { defaults.set(newValue.path, forKey: "output.directory") }
     }
@@ -130,16 +110,6 @@ final class Settings {
     var imageFormat: ImageFormat {
         get { ImageFormat(rawValue: defaults.string(forKey: "output.format") ?? "") ?? .png }
         set { defaults.set(newValue.rawValue, forKey: "output.format") }
-    }
-
-    var shadowEnabled: Bool {
-        get { defaults.object(forKey: "output.shadow") as? Bool ?? true }
-        set { defaults.set(newValue, forKey: "output.shadow") }
-    }
-
-    var cornerRadius: Double {
-        get { defaults.object(forKey: "output.cornerRadius") as? Double ?? 0 }
-        set { defaults.set(newValue, forKey: "output.cornerRadius") }
     }
 
     var shortcut: Shortcut {
@@ -171,17 +141,6 @@ final class Settings {
         set { setOptionalShortcut(newValue, "scan.shortcut") }
     }
 
-    var customCommands: [CustomCommand] {
-        get { defaults.data(forKey: "hotkeys.custom").flatMap { try? JSONDecoder().decode([CustomCommand].self, from: $0) } ?? [] }
-        set { defaults.set(try? JSONEncoder().encode(newValue), forKey: "hotkeys.custom") }
-    }
-
-    /// App names, bundle ids or path fragments; while such an app is in front, Snap's hotkeys are released.
-    var ignoredApps: [String] {
-        get { defaults.stringArray(forKey: "hotkeys.ignoredApps") ?? [] }
-        set { defaults.set(newValue, forKey: "hotkeys.ignoredApps") }
-    }
-
     /// A missing key means "never set", which gets the default; empty data means the user cleared it.
     private func optionalShortcut(_ key: String, default value: Shortcut) -> Shortcut? {
         guard let data = defaults.data(forKey: key) else { return value }
@@ -190,90 +149,6 @@ final class Settings {
 
     private func setOptionalShortcut(_ shortcut: Shortcut?, _ key: String) {
         defaults.set(shortcut.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: key)
-    }
-
-    /// Highlight buttons, fields and panels under the pointer, not just whole windows (needs Accessibility permission).
-    var detectElements: Bool {
-        get { defaults.object(forKey: "capture.detectElements") as? Bool ?? true }
-        set { defaults.set(newValue, forKey: "capture.detectElements") }
-    }
-
-    /// Command per screen corner (empty for none), run when the pointer rests there.
-    var hotCorners: [ScreenCorner: String] {
-        get {
-            let raw = defaults.dictionary(forKey: "hotCorners") as? [String: String] ?? [:]
-            return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in ScreenCorner(rawValue: k).map { ($0, v) } })
-        }
-        set { defaults.set(Dictionary(uniqueKeysWithValues: newValue.map { ($0.key.rawValue, $0.value) }), forKey: "hotCorners") }
-    }
-
-    /// Pixels shown per screen pixel in the capture loupe: 4, 8 or 12.
-    var magnifierZoom: Int {
-        get { defaults.object(forKey: "magnifier.zoom") as? Int ?? 8 }
-        set { defaults.set(newValue, forKey: "magnifier.zoom") }
-    }
-
-    var magnifierGrid: Bool {
-        get { defaults.object(forKey: "magnifier.grid") as? Bool ?? true }
-        set { defaults.set(newValue, forKey: "magnifier.grid") }
-    }
-
-    /// Hide the loupe entirely; holding ⌥ still shows it while choosing an area.
-    var magnifierHidden: Bool {
-        get { defaults.bool(forKey: "magnifier.hidden") }
-        set { defaults.set(newValue, forKey: "magnifier.hidden") }
-    }
-
-    /// ⌥⌘ + drag anywhere starts a capture of that area.
-    var superSnip: Bool {
-        get { defaults.bool(forKey: "capture.superSnip") }
-        set { defaults.set(newValue, forKey: "capture.superSnip") }
-    }
-
-    /// Whether a capture includes the mouse pointer by default (` toggles it while capturing).
-    var captureCursor: Bool {
-        get { defaults.bool(forKey: "capture.cursor") }
-        set { defaults.set(newValue, forKey: "capture.cursor") }
-    }
-
-    /// Keep open pins when Snap quits and show them again at the next launch.
-    var restorePins: Bool {
-        get { defaults.object(forKey: "pin.restore") as? Bool ?? true }
-        set { defaults.set(newValue, forKey: "pin.restore") }
-    }
-
-    /// How many past captures to keep for replay (`,` / `.` in the capture overlay). 0 turns history off.
-    var historyLimit: Int {
-        get { defaults.object(forKey: "history.limit") as? Int ?? 20 }
-        set { defaults.set(max(0, newValue), forKey: "history.limit") }
-    }
-
-    /// Also keep captures that were cancelled with Esc, so an accidental Esc loses nothing.
-    var keepCancelledHistory: Bool {
-        get { defaults.bool(forKey: "history.keepCancelled") }
-        set { defaults.set(newValue, forKey: "history.keepCancelled") }
-    }
-
-    /// Also save to the folder when a capture is copied or pinned.
-    var autoSave: Bool {
-        get { defaults.bool(forKey: "output.autoSave") }
-        set { defaults.set(newValue, forKey: "output.autoSave") }
-    }
-
-    var fileNameTemplate: String {
-        get { defaults.string(forKey: "output.fileNameTemplate") ?? FileNameTemplate.default }
-        set { defaults.set(newValue, forKey: "output.fileNameTemplate") }
-    }
-
-    /// Also put a PNG file on the clipboard when copying, so it can be pasted into Finder.
-    var copyAsFile: Bool {
-        get { defaults.bool(forKey: "output.copyAsFile") }
-        set { defaults.set(newValue, forKey: "output.copyAsFile") }
-    }
-
-    var playSound: Bool {
-        get { defaults.bool(forKey: "output.sound") }
-        set { defaults.set(newValue, forKey: "output.sound") }
     }
 
     var translationConfig: TranslationConfig {

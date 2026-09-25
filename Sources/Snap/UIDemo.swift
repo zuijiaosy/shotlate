@@ -84,29 +84,24 @@ enum UIDemo {
         drag(CGPoint(x: 70, y: 60), CGPoint(x: 700, y: 360), capture: "selecting")
         shot("selected")
 
-        key("r", code: 15)
+        key("1", code: 18)
         drag(CGPoint(x: 96, y: 120), CGPoint(x: 330, y: 170), capture: nil)
         shot("rectangle-selected")
 
-        key("a", code: 0)
+        key("2", code: 19)
         drag(CGPoint(x: 560, y: 110), CGPoint(x: 420, y: 150))
-        key("m", code: 46)
+        key("4", code: 21)
         drag(CGPoint(x: 100, y: 196), CGPoint(x: 300, y: 196))
         shot("mosaic-brush")
 
-        // A number opens a caption editor beside it; the next click places the next number.
-        key("n", code: 45)
+        key("7", code: 26)
         click(CGPoint(x: 90, y: 110))
-        if let editor = window.firstResponder as? NSTextView {
-            editor.insertText("登录入口", replacementRange: NSRange(location: NSNotFound, length: 0))
-        }
         click(CGPoint(x: 90, y: 250))
-        shot("number-caption")
-        key("\u{1b}", code: 53) // close the empty caption of number 2
-        key("p", code: 35)
+        shot("numbers")
+        key("3", code: 20)
         drag(CGPoint(x: 460, y: 250), CGPoint(x: 660, y: 290))
 
-        key("1", code: 18)
+        key("6", code: 22)
         click(CGPoint(x: 420, y: 320))
         if let editor = window.firstResponder as? NSTextView {
             editor.insertText("Snap 标注\n第二行", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -133,17 +128,13 @@ enum UIDemo {
         shot("redo-once")
 
         func pump(_ seconds: TimeInterval) async { try? await Task.sleep(for: .seconds(seconds)) }
-        key("x", code: 7) // OCR
-        for _ in 0..<200 where !(view.subviews.contains { $0 is OCRPanelView && !$0.isHidden }) { await pump(0.25) }
-        shot("ocr-panel")
-        key("\u{1b}", code: 53) // close OCR panel
         Settings.shared.apiKey.isEmpty ? key("y", code: 16) : ()
         await pump(0.1)
         shot("translate-without-key")
 
         // Frosted-glass mosaic over the button, then delete badge 1 so badge 2 renumbers to 1.
         key("\u{1b}", code: 53)
-        key("m", code: 46)
+        key("4", code: 21)
         view.testing_applyStyle(.mosaicMode(.rect))
         view.testing_applyStyle(.mosaicEffect(.blur))
         drag(CGPoint(x: 540, y: 285), CGPoint(x: 690, y: 330))
@@ -159,18 +150,17 @@ enum UIDemo {
         for _ in 0..<20 { key("", code: 125, flags: .command) }
         shot("keyboard-resized")
 
-        if let rep = view.exportImage(format: .png), let png = rep.representation(using: .png, properties: [:]) {
+        if let rep = view.exportImage(), let png = rep.representation(using: .png, properties: [:]) {
             try? png.write(to: outputDirectory.appendingPathComponent("export.png"))
         }
 
-        // Pin: zoom to 60%, rotate right, and render the pin window's content.
-        if let rep = view.exportImage(format: .png, shadow: false) {
+        // Pin: zoom to 60% and render the pin window's content.
+        if let rep = view.exportImage() {
             let pin = PinWindow(rep: rep, frame: CGRect(x: -5000, y: -5000, width: rep.size.width, height: rep.size.height))
             pin.setZoom(0.6)
-            pin.rotateRight()
             if let content = pin.contentView, let out = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
                 content.cacheDisplay(in: content.bounds, to: out)
-                try? out.representation(using: .png, properties: [:])?.write(to: outputDirectory.appendingPathComponent("pin-rotated.png"))
+                try? out.representation(using: .png, properties: [:])?.write(to: outputDirectory.appendingPathComponent("pin.png"))
                 print("Pin frame \(pin.frame.size) zoom \(pin.zoom)")
             }
         }

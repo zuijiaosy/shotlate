@@ -9,7 +9,7 @@ final class CaptureHarness {
     let size: CGSize
 
     /// A 2x canvas: light grey with a white card, black text lines and a dark band, so tools show up on varied pixels.
-    init(size: CGSize = CGSize(width: 800, height: 500), windowRects: [CGRect] = [], cursor: CapturedCursor? = nil, lines: [String]? = nil) {
+    init(size: CGSize = CGSize(width: 800, height: 500), windowRects: [CGRect] = [], lines: [String]? = nil) {
         self.size = size
         let scale: CGFloat = 2
         let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
@@ -40,7 +40,7 @@ final class CaptureHarness {
         window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: size.width, height: size.height),
                           styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        view = CaptureView(frame: frame, snapshot: snapshot, windowRects: windowRects, displayID: 0, cursor: cursor)
+        view = CaptureView(frame: frame, snapshot: snapshot, windowRects: windowRects, displayID: 0)
         window.contentView = CaptureRootView(frame: frame, snapshot: snapshot, captureView: view)
         window.makeFirstResponder(view)
     }
@@ -81,9 +81,9 @@ final class CaptureHarness {
         drag(CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY))
     }
 
-    /// The exported image (no shadow) and a pixel reader in selection points.
+    /// The exported image.
     func export() -> NSBitmapImageRep? {
-        view.exportImage(format: .png, shadow: false)
+        view.exportImage()
     }
 
     /// Color of the snapshot at a point, for comparing against the exported pixels.

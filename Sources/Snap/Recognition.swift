@@ -2,28 +2,18 @@ import AppKit
 import SnapCore
 import Vision
 
-/// A piece of personal data or a secret found by OCR, with the box around just that text.
-struct SensitiveRegion {
-    var kind: SensitiveText.Kind
-    var rect: CGRect
-}
-
 struct RecognitionResult {
     var lines: [OCRLine]
-    var codes: [String]
-    var sensitive: [SensitiveRegion] = []
 
     /// Recognized text in reading order: one line per OCR line, paragraphs kept together.
     var plainText: String {
-        var parts = TextBlockBuilder.group(lines).map { $0.lines.map(\.text).joined(separator: "\n") }
-        parts += codes
-        return parts.joined(separator: "\n")
+        TextBlockBuilder.group(lines).map { $0.lines.map(\.text).joined(separator: "\n") }.joined(separator: "\n")
     }
 }
 
 enum TextRecognizer {
     /// Loads the recognition model in the background at launch. The first request in a process can
-    /// take many seconds while the model is compiled; paying that before the user presses OCR hides it.
+    /// take many seconds while the model is compiled; paying that before the user translates hides it.
     static func warmUp() {
         Task.detached(priority: .utility) {
             let size = 64
@@ -64,27 +54,18 @@ enum TextRecognizer {
         }.value
     }
 
-    /// Runs Vision text and barcode recognition on `image`, the pixels of `selection`.
+    /// Runs Vision text recognition on `image`, the pixels of `selection`.
     /// Returned line rects are in the same coordinate space as `selection`.
     static func recognize(_ image: CGImage, selection: CGRect) async throws -> RecognitionResult {
         try await Task.detached(priority: .userInitiated) {
-            let textRequest = makeTextRequest()
-            let barcodeRequest = VNDetectBarcodesRequest()
-            try VNImageRequestHandler(cgImage: image).perform([textRequest, barcodeRequest])
-
-            var sensitive: [SensitiveRegion] = []
-            let lines = (textRequest.results ?? []).compactMap { observation -> OCRLine? in
+            let request = makeTextRequest()
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            let lines = (request.results ?? []).compactMap { observation -> OCRLine? in
                 guard let candidate = observation.topCandidates(1).first else { return nil }
-                for match in SensitiveText.matches(in: candidate.string) {
-                    // Vision can box a substring, so only the matching characters get covered, not the whole line.
-                    let box = (try? candidate.boundingBox(for: match.range))?.boundingBox ?? observation.boundingBox
-                    sensitive.append(SensitiveRegion(kind: match.kind, rect: VisionGeometry.rect(fromNormalized: box, in: selection)))
-                }
                 return OCRLine(text: candidate.string,
                                rect: VisionGeometry.rect(fromNormalized: observation.boundingBox, in: selection))
             }
-            let codes = (barcodeRequest.results ?? []).compactMap(\.payloadStringValue)
-            return RecognitionResult(lines: lines, codes: codes, sensitive: sensitive)
+            return RecognitionResult(lines: lines)
         }.value
     }
 }
@@ -221,7 +202,7 @@ enum ImageTranslator {
         let base = NSImage(cgImage: cg, size: rep.size)
         let renderer = ContentRenderer(base: base, bounds: bounds, effect: { _ in base })
         guard let out = Exporter.render(renderer: renderer, selection: bounds, scale: CGFloat(cg.width) / rep.size.width, items: [],
-                                        translation: laidOut, options: ExportOptions(cornerRadius: 0, shadow: false, format: .png))
+                                        translation: laidOut)
         else { throw CocoaError(.fileWriteUnknown) }
         return out
     }

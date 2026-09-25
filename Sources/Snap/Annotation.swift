@@ -1,18 +1,14 @@
 import AppKit
 
 enum Tool: String, CaseIterable {
-    case rectangle, ellipse, line, arrow, pen, highlighter, mosaic, eraser, magnifier, text, number
+    case rectangle, arrow, pen, mosaic, magnifier, text, number
 
     var title: String {
         switch self {
         case .rectangle: return "矩形"
-        case .ellipse: return "椭圆"
-        case .line: return "直线"
         case .arrow: return "箭头"
         case .pen: return "画笔"
-        case .highlighter: return "记号笔"
         case .mosaic: return "马赛克"
-        case .eraser: return "橡皮擦"
         case .magnifier: return "放大镜"
         case .text: return "文字"
         case .number: return "序号"
@@ -22,41 +18,32 @@ enum Tool: String, CaseIterable {
     var symbol: String {
         switch self {
         case .rectangle: return "square"
-        case .ellipse: return "circle"
-        case .line: return "line.diagonal"
         case .arrow: return "arrow.up.right"
         case .pen: return "scribble"
-        case .highlighter: return "highlighter"
         case .mosaic: return "checkerboard.rectangle"
-        case .eraser: return "eraser"
         case .magnifier: return "plus.magnifyingglass"
         case .text: return "character.cursor.ibeam" // "textformat" turns into 格式 under the zh_CN localization
         case .number: return "1.circle"
         }
     }
 
-    /// Single-key shortcut while the capture overlay is active.
-    var key: String {
+    /// Single-key shortcut out of the box, 1 to 7 in toolbar order; the user can change it from the toolbar's hover card (see `ToolbarKeys`).
+    var defaultKey: String {
         switch self {
-        case .rectangle: return "r"
-        case .ellipse: return "o"
-        case .line: return "l"
-        case .arrow: return "a"
-        case .pen: return "p"
-        case .highlighter: return "h"
-        case .mosaic: return "m"
-        case .eraser: return "e"
-        case .magnifier: return "g"
-        case .text: return "1" // T pins the capture
-        case .number: return "n"
+        case .rectangle: return "1"
+        case .arrow: return "2"
+        case .pen: return "3"
+        case .mosaic: return "4"
+        case .magnifier: return "5"
+        case .text: return "6"
+        case .number: return "7"
         }
     }
 
     /// What "size" means differs per tool: stroke width, brush width, font size or badge diameter.
     var sizeRange: ClosedRange<CGFloat> {
         switch self {
-        case .mosaic, .eraser: return 6...120
-        case .highlighter: return 6...60
+        case .mosaic: return 6...120
         case .magnifier: return 1...10
         case .text: return 10...120
         case .number: return 14...80
@@ -66,8 +53,7 @@ enum Tool: String, CaseIterable {
 
     var sizePresets: [CGFloat] {
         switch self {
-        case .mosaic, .eraser: return [12, 24, 48]
-        case .highlighter: return [12, 20, 32]
+        case .mosaic: return [12, 24, 48]
         case .magnifier: return [2, 3, 5]
         case .text: return [14, 20, 32]
         case .number: return [20, 26, 36]
@@ -78,15 +64,12 @@ enum Tool: String, CaseIterable {
     var defaultSize: CGFloat { sizePresets[1] }
 
     /// Freehand tools always draw, even when the stroke starts on an existing annotation.
-    var isFreehand: Bool { self == .pen || self == .highlighter || self.usesAreaModes }
-
-    /// Mosaic and eraser work either as a brush or on a dragged box.
-    var usesAreaModes: Bool { self == .mosaic || self == .eraser }
+    var isFreehand: Bool { self == .pen || self == .mosaic }
 }
 
 enum MosaicMode: String { case brush, rect }
 
-/// Stroke pattern for outlined shapes, lines, arrows and the pen.
+/// Stroke pattern for rectangles, arrows and the pen.
 enum DashStyle: String, Codable, CaseIterable { case solid, dashed, dotted }
 
 /// Arrow look: the tapered filled arrow, a plain line with an open head, or heads at both ends.
@@ -104,20 +87,12 @@ struct ItemStyle: Equatable, Codable {
 }
 enum MosaicEffect: String, Codable {
     case pixelate, blur
-    /// The untouched screenshot: this is how the eraser removes annotations under it.
-    case original
 }
 
 enum Shape: Equatable, Codable {
     case rectangle(CGRect)
-    case ellipse(CGRect)
-    case line(CGPoint, CGPoint)
     case arrow(CGPoint, CGPoint)
-    /// Connected segments from clicks; with `arrow` the last segment ends in an arrowhead.
-    case polyline([CGPoint], arrow: Bool)
     case pen([CGPoint])
-    /// A translucent marker stroke, blended so text underneath stays readable.
-    case highlighter([CGPoint])
     case mosaicRect(CGRect)
     case mosaicBrush([CGPoint])
     /// Text origin is the top-left of the first line; lines wrap at `width`.
@@ -134,19 +109,13 @@ struct AnnotationItem: Equatable {
     var size: CGFloat
     var effect: MosaicEffect = .pixelate
     var style = ItemStyle()
-    /// For a caption typed right after placing a number: that number, which it moves and is deleted with.
-    var captionOf: UUID?
 
     var tool: Tool {
         switch shape {
         case .rectangle: return .rectangle
-        case .ellipse: return .ellipse
-        case .line: return .line
         case .arrow: return .arrow
-        case let .polyline(_, arrow): return arrow ? .arrow : .line
         case .pen: return .pen
-        case .highlighter: return .highlighter
-        case .mosaicRect, .mosaicBrush: return effect == .original ? .eraser : .mosaic
+        case .mosaicRect, .mosaicBrush: return .mosaic
         case .text: return .text
         case .number: return .number
         case .magnifier: return .magnifier
@@ -209,7 +178,6 @@ enum ItemHandle: Equatable {
     case rect(ResizeHandle)
     case start
     case end
-    case vertex(Int)
 }
 
 // MARK: - Geometry
@@ -235,19 +203,14 @@ extension AnnotationItem {
     var bounds: CGRect {
         let pad = size / 2 + 1
         switch shape {
-        case let .rectangle(r), let .ellipse(r):
+        case let .rectangle(r):
             return r.insetBy(dx: -pad, dy: -pad)
         case let .mosaicRect(r):
             return r
-        case let .line(a, b):
-            return CGRect(corners: a, b).insetBy(dx: -pad, dy: -pad)
         case let .arrow(a, b):
             let head = Self.arrowHeadWidth(size) / 2
             return CGRect(corners: a, b).insetBy(dx: -head, dy: -head)
-        case let .polyline(points, arrow):
-            let pad = arrow ? max(pad, Self.arrowHeadWidth(size) / 2) : pad
-            return points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -pad, dy: -pad)
-        case let .pen(points), let .highlighter(points), let .mosaicBrush(points):
+        case let .pen(points), let .mosaicBrush(points):
             return points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -pad, dy: -pad)
         case let .text(text, origin, width):
             let r = CGRect(origin: origin, size: Self.textSize(text, size: size, width: width))
@@ -271,20 +234,11 @@ extension AnnotationItem {
             let outer = r.insetBy(dx: -tolerance, dy: -tolerance)
             let inner = r.insetBy(dx: tolerance, dy: tolerance)
             return outer.contains(p) && (inner.isEmpty || !inner.contains(p))
-        case let .ellipse(r):
-            let a = max(r.width / 2, 1), b = max(r.height / 2, 1)
-            let dx = (p.x - r.midX) / a, dy = (p.y - r.midY) / b
-            let radial = (dx * dx + dy * dy).squareRoot()
-            return abs(radial - 1) * min(a, b) <= tolerance
         case let .mosaicRect(r):
             return r.contains(p)
-        case let .line(a, b):
-            return distance(p, a, b) <= tolerance
         case let .arrow(a, b):
             return distance(p, a, b) <= max(tolerance, Self.arrowHeadWidth(size) / 2)
-        case let .polyline(points, _):
-            return zip(points, points.dropFirst()).contains { distance(p, $0, $1) <= tolerance }
-        case let .pen(points), let .highlighter(points), let .mosaicBrush(points):
+        case let .pen(points), let .mosaicBrush(points):
             if points.count == 1 { return hypot(p.x - points[0].x, p.y - points[0].y) <= tolerance }
             return zip(points, points.dropFirst()).contains { distance(p, $0, $1) <= tolerance }
         case .text:
@@ -299,12 +253,10 @@ extension AnnotationItem {
 
     var handles: [(ItemHandle, CGPoint)] {
         switch shape {
-        case let .rectangle(r), let .ellipse(r), let .mosaicRect(r):
+        case let .rectangle(r), let .mosaicRect(r):
             return ResizeHandle.allCases.map { (.rect($0), $0.point(in: r)) }
-        case let .line(a, b), let .arrow(a, b):
+        case let .arrow(a, b):
             return [(.start, a), (.end, b)]
-        case let .polyline(points, _):
-            return points.enumerated().map { (.vertex($0.offset), $0.element) }
         case let .magnifier(source, target, _):
             return [(.start, source), (.end, target)]
         default:
@@ -317,13 +269,9 @@ extension AnnotationItem {
         func m(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x + d.x, y: p.y + d.y) }
         switch shape {
         case let .rectangle(r): copy.shape = .rectangle(r.offsetBy(dx: d.x, dy: d.y))
-        case let .ellipse(r): copy.shape = .ellipse(r.offsetBy(dx: d.x, dy: d.y))
         case let .mosaicRect(r): copy.shape = .mosaicRect(r.offsetBy(dx: d.x, dy: d.y))
-        case let .line(a, b): copy.shape = .line(m(a), m(b))
         case let .arrow(a, b): copy.shape = .arrow(m(a), m(b))
-        case let .polyline(points, arrow): copy.shape = .polyline(points.map(m), arrow: arrow)
         case let .pen(points): copy.shape = .pen(points.map(m))
-        case let .highlighter(points): copy.shape = .highlighter(points.map(m))
         case let .mosaicBrush(points): copy.shape = .mosaicBrush(points.map(m))
         case let .text(text, origin, width): copy.shape = .text(text, m(origin), width: width)
         case let .number(c): copy.shape = .number(m(c))
@@ -336,19 +284,13 @@ extension AnnotationItem {
         var copy = self
         switch (shape, handle) {
         case let (.rectangle(r), .rect(h)): copy.shape = .rectangle(h.resize(r, by: d))
-        case let (.ellipse(r), .rect(h)): copy.shape = .ellipse(h.resize(r, by: d))
         case let (.mosaicRect(r), .rect(h)): copy.shape = .mosaicRect(h.resize(r, by: d))
-        case let (.line(a, b), .start): copy.shape = .line(CGPoint(x: a.x + d.x, y: a.y + d.y), b)
-        case let (.line(a, b), .end): copy.shape = .line(a, CGPoint(x: b.x + d.x, y: b.y + d.y))
         case let (.arrow(a, b), .start): copy.shape = .arrow(CGPoint(x: a.x + d.x, y: a.y + d.y), b)
         case let (.arrow(a, b), .end): copy.shape = .arrow(a, CGPoint(x: b.x + d.x, y: b.y + d.y))
         case let (.magnifier(source, target, radius), .start):
             copy.shape = .magnifier(source: CGPoint(x: source.x + d.x, y: source.y + d.y), target: target, radius: radius)
         case let (.magnifier(source, target, radius), .end):
             copy.shape = .magnifier(source: source, target: CGPoint(x: target.x + d.x, y: target.y + d.y), radius: radius)
-        case (.polyline(var points, let arrow), let .vertex(i)) where points.indices.contains(i):
-            points[i] = CGPoint(x: points[i].x + d.x, y: points[i].y + d.y)
-            copy.shape = .polyline(points, arrow: arrow)
         default: break
         }
         return copy
@@ -356,10 +298,9 @@ extension AnnotationItem {
 
     var isMeaningful: Bool {
         switch shape {
-        case let .rectangle(r), let .ellipse(r), let .mosaicRect(r): return r.width >= 3 && r.height >= 3
-        case let .line(a, b), let .arrow(a, b): return hypot(a.x - b.x, a.y - b.y) >= 3
-        case let .polyline(points, _): return points.count >= 2 && zip(points, points.dropFirst()).contains { hypot($0.x - $1.x, $0.y - $1.y) >= 3 }
-        case let .pen(points), let .highlighter(points): return points.count >= 2
+        case let .rectangle(r), let .mosaicRect(r): return r.width >= 3 && r.height >= 3
+        case let .arrow(a, b): return hypot(a.x - b.x, a.y - b.y) >= 3
+        case let .pen(points): return points.count >= 2
         case let .mosaicBrush(points): return !points.isEmpty
         case let .text(text, _, _): return !text.isEmpty
         case .number: return true
@@ -414,47 +355,23 @@ struct TranslatedBlock {
 
 /// Draws annotations and translations over the frozen screen, in a flipped (top-left origin) context.
 /// Shared by the on-screen view and the exporter so the saved image matches what was on screen.
-/// The mouse pointer as it was when the capture started, drawable onto the screenshot.
-struct CapturedCursor {
-    var image: NSImage
-    /// Where the pointer image goes, in the capture view's flipped points.
-    var rect: CGRect
-}
-
 struct ContentRenderer {
     let base: NSImage
     let bounds: CGRect
     let effect: (MosaicEffect) -> NSImage
-    /// Drawn right above the screenshot, under every annotation.
-    var cursor: CapturedCursor? = nil
 
     func draw(items: [AnnotationItem], translation: [TranslatedBlock]) {
         drawBase()
-        drawOverlays(items: items, draft: nil, hiddenID: nil, translation: translation, baseDrawn: true)
+        drawOverlays(items: items, draft: nil, hiddenID: nil, translation: translation)
     }
 
     func drawBase() {
         base.draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
-        drawCursor()
-    }
-
-    func drawCursor() {
-        cursor?.image.draw(in: cursor!.rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
 
     /// Translations go first so annotations stay on top of them.
-    ///
-    /// On screen the overlay is a transparent layer above the screenshot. A highlighter multiplies with what is
-    /// under it, so when one is present the screenshot is painted into the overlay first (`baseDrawn` false);
-    /// the screen then matches the export, which always starts from the screenshot.
-    func drawOverlays(items: [AnnotationItem], draft: AnnotationItem?, hiddenID: UUID?, translation: [TranslatedBlock],
-                      baseDrawn: Bool = false) {
-        if !baseDrawn, (items + [draft].compactMap { $0 }).contains(where: { $0.tool == .highlighter }) {
-            drawBase()
-        } else if !baseDrawn {
-            // On screen the screenshot layer has no pointer; the overlay adds it.
-            drawCursor()
-        }
+    /// On screen the overlay is a transparent layer above the screenshot, which is a separate layer.
+    func drawOverlays(items: [AnnotationItem], draft: AnnotationItem?, hiddenID: UUID?, translation: [TranslatedBlock]) {
         for block in translation { Self.draw(block) }
         var number = 0
         for item in items {
@@ -513,10 +430,6 @@ struct ContentRenderer {
                 cg.setLineJoin(.miter)
                 cg.stroke(r)
             }
-        case let .ellipse(r):
-            cg.strokeEllipse(in: r)
-        case let .line(a, b):
-            cg.strokeLineSegments(between: [a, b])
         case let .arrow(a, b):
             if item.style.arrowHead == .tapered, item.style.dash == .solid {
                 if let path = Self.arrowPath(from: a, to: b, size: item.size) {
@@ -526,22 +439,7 @@ struct ContentRenderer {
             } else {
                 Self.drawArrow([a, b], head: item.style.arrowHead, size: item.size, in: cg)
             }
-        case let .polyline(points, arrow):
-            guard points.count >= 2 else { break }
-            if arrow {
-                Self.drawArrow(points, head: item.style.arrowHead, size: item.size, in: cg)
-            } else {
-                cg.addLines(between: points)
-                cg.strokePath()
-            }
         case let .pen(points):
-            cg.addPath(Self.smoothPath(points))
-            cg.strokePath()
-        case let .highlighter(points):
-            // One path stroked once, so overlapping parts of the stroke don't get darker.
-            cg.setBlendMode(.multiply)
-            cg.setAlpha(0.55)
-            cg.setLineCap(.butt)
             cg.addPath(Self.smoothPath(points))
             cg.strokePath()
         case let .mosaicRect(r):
@@ -683,7 +581,7 @@ struct ContentRenderer {
         }
     }
 
-    /// A plain triangular head at `tip`, pointing away from `tail`; used by polyline arrows whose shaft is a stroke.
+    /// A plain triangular head at `tip`, pointing away from `tail`; used by arrows whose shaft is a stroke.
     static func arrowHeadPath(from tail: CGPoint, to tip: CGPoint, size: CGFloat) -> CGPath {
         let dx = tip.x - tail.x, dy = tip.y - tail.y
         let length = max(hypot(dx, dy), 0.001)

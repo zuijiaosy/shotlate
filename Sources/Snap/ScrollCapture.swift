@@ -1,9 +1,8 @@
 import AppKit
-import ApplicationServices
 import ScreenCaptureKit
 import SnapCore
 
-/// Long screenshot: captures a screen region repeatedly while the user (or auto-scroll) scrolls it,
+/// Long screenshot: captures a screen region repeatedly while the user scrolls it,
 /// and stitches the frames with `ScrollStitcher`.
 final class ScrollCaptureController {
     private(set) static var current: ScrollCaptureController?
@@ -17,9 +16,7 @@ final class ScrollCaptureController {
     private let stitchQueue = DispatchQueue(label: "app.snap.stitch", qos: .userInitiated)
     private var filter: SCContentFilter?
     private var captureTimer: Timer?
-    private var autoScrollTimer: Timer?
     private var inFlight = false
-    private var unchangedCount = 0
     private var lastPreview = Date.distantPast
     private var finished = false
     private var dumped = 0
@@ -61,7 +58,6 @@ final class ScrollCaptureController {
         panel = ScrollCapturePanel()
         panel.onFinish = { [weak self] in self?.finish() }
         panel.onCancel = { [weak self] in self?.cancel() }
-        panel.onAutoScroll = { [weak self] in self?.toggleAutoScroll() }
     }
 
     private func begin() {
@@ -127,16 +123,10 @@ final class ScrollCaptureController {
         if ProcessInfo.processInfo.environment["SNAP_DEBUG_STITCH"] != nil { print("stitch:", result, stitcher.height) }
         switch result {
         case .started, .appended:
-            unchangedCount = 0
             panel.setStatus("\(stitcher.height.formatted()) px · 继续滚动，或点完成")
             refreshPreview(force: result == .started)
         case .unchanged:
-            unchangedCount += 1
-            // Auto-scroll that stops producing new rows has reached the end.
-            if autoScrollTimer != nil, unchangedCount >= 12 {
-                stopAutoScroll()
-                panel.setStatus("\(stitcher.height.formatted()) px · 已经到底了")
-            }
+            break
         case .scrolledBack:
             panel.setStatus("往回滚动的部分不会拼接，继续往下滚即可")
         case .noOverlap:
@@ -157,43 +147,11 @@ final class ScrollCaptureController {
         }
     }
 
-    // MARK: Auto scroll
-
-    private func toggleAutoScroll() {
-        if autoScrollTimer != nil {
-            stopAutoScroll()
-            return
-        }
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        guard AXIsProcessTrustedWithOptions(options) else {
-            panel.setStatus("自动滚动需要辅助功能权限：请在「系统设置 → 隐私与安全性 → 辅助功能」中允许 Snap")
-            return
-        }
-        // Scroll events go to the window under the pointer, so park it in the region.
-        guard let primary = NSScreen.screens.first else { return }
-        CGWarpMouseCursorPosition(CGPoint(x: rect.midX, y: primary.frame.maxY - rect.midY))
-        unchangedCount = 0
-        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { _ in
-            CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -6, wheel2: 0, wheel3: 0)?
-                .post(tap: .cghidEventTap)
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        autoScrollTimer = timer
-        panel.setAutoScrolling(true)
-    }
-
-    private func stopAutoScroll() {
-        autoScrollTimer?.invalidate()
-        autoScrollTimer = nil
-        panel.setAutoScrolling(false)
-    }
-
     // MARK: Finish
 
     private func tearDown() {
         finished = true
         captureTimer?.invalidate()
-        stopAutoScroll()
         frameWindow.orderOut(nil)
         panel.orderOut(nil)
         if ScrollCaptureController.current === self { ScrollCaptureController.current = nil }
@@ -216,7 +174,6 @@ final class ScrollCaptureController {
                     onFinished(image)
                     return
                 }
-                Sound.playCapture()
                 ScrollResultWindow.show(image: image, scale: scale, on: screen)
             }
         }
@@ -237,11 +194,10 @@ private final class DashedFrameView: NSView {
     }
 }
 
-/// Control panel beside the region: live preview, status, auto-scroll, cancel and done.
+/// Control panel beside the region: live preview, status, cancel and done.
 final class ScrollCapturePanel: NSPanel {
     var onFinish: () -> Void = {}
     var onCancel: () -> Void = {}
-    var onAutoScroll: () -> Void = {}
     let previewWidth: CGFloat = 150
 
     private let root = PanelView()
@@ -249,7 +205,6 @@ final class ScrollCapturePanel: NSPanel {
     private let preview = NSImageView()
     private let previewBox = NSView()
     private let status = NSTextField(wrappingLabelWithString: "")
-    private let autoButton = NSButton(title: "自动滚动", target: nil, action: nil)
     private let cancelButton = NSButton(title: "取消", target: nil, action: nil)
     private let doneButton = NSButton(title: "完成", target: nil, action: nil)
 
@@ -279,10 +234,6 @@ final class ScrollCapturePanel: NSPanel {
         status.textColor = .secondaryLabelColor
         status.maximumNumberOfLines = 4
 
-        autoButton.bezelStyle = .push
-        autoButton.controlSize = .small
-        autoButton.target = self
-        autoButton.action = #selector(autoTapped)
         cancelButton.bezelStyle = .push
         cancelButton.controlSize = .small
         cancelButton.target = self
@@ -292,7 +243,7 @@ final class ScrollCapturePanel: NSPanel {
         doneButton.keyEquivalent = "\r"
         doneButton.target = self
         doneButton.action = #selector(doneTapped)
-        for view in [titleLabel, previewBox, status, autoButton, cancelButton, doneButton] as [NSView] { root.addSubview(view) }
+        for view in [titleLabel, previewBox, status, cancelButton, doneButton] as [NSView] { root.addSubview(view) }
     }
 
     override var canBecomeKey: Bool { true }
@@ -314,8 +265,7 @@ final class ScrollCapturePanel: NSPanel {
         let buttonsY = h - 36
         cancelButton.frame = CGRect(x: 12, y: buttonsY, width: 80, height: 24)
         doneButton.frame = CGRect(x: w - 92, y: buttonsY, width: 80, height: 24)
-        autoButton.frame = CGRect(x: 12, y: buttonsY - 30, width: w - 24, height: 24)
-        status.frame = CGRect(x: 14, y: buttonsY - 30 - 50, width: w - 28, height: 46)
+        status.frame = CGRect(x: 14, y: buttonsY - 50, width: w - 28, height: 46)
         previewBox.frame = CGRect(x: (w - previewWidth) / 2, y: 38, width: previewWidth, height: max(40, status.frame.minY - 44))
         preview.frame = previewBox.bounds
     }
@@ -329,11 +279,6 @@ final class ScrollCapturePanel: NSPanel {
         preview.image = NSImage(cgImage: image, size: size)
     }
 
-    func setAutoScrolling(_ on: Bool) {
-        autoButton.title = on ? "停止自动滚动" : "自动滚动"
-    }
-
-    @objc private func autoTapped() { onAutoScroll() }
     @objc private func cancelTapped() { onCancel() }
     @objc private func doneTapped() { onFinish() }
 
@@ -440,14 +385,4 @@ final class ScrollResultWindow: NSWindow, NSWindowDelegate {
 
 private final class FlippedImageView: NSImageView {
     override var isFlipped: Bool { true }
-}
-
-enum Sound {
-    private static let capture = NSSound(contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif", byReference: true)
-
-    static func playCapture() {
-        guard Settings.shared.playSound else { return }
-        capture?.stop()
-        capture?.play()
-    }
 }

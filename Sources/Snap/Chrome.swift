@@ -1,5 +1,4 @@
 import AppKit
-import SnapCore
 
 /// Selection blue, matching iShot's selection frame and top bar.
 let selectionBlue = NSColor(srgbRed: 0.16, green: 0.58, blue: 0.93, alpha: 1)
@@ -89,26 +88,21 @@ class PanelView: NSView {
 }
 
 /// Borderless button that runs a closure, with hover and "active" states.
-/// With a `shortcut`, the key is drawn small at the icon's lower right, like Excalidraw's toolbar.
 final class ChromeButton: NSButton {
     private let handler: () -> Void
     private var hovering = false
-    private let shortcut: NSAttributedString?
-    private static let shortcutFont = NSFont.systemFont(ofSize: 8.5, weight: .medium)
-    /// Width of the icon area; the shortcut label hangs off its lower right.
-    private let iconWidth: CGFloat
     var tint: NSColor = .labelColor { didSet { needsDisplay = true } }
+    /// Called when the pointer enters (true) or leaves (false); the toolbar shows its hover card with it.
+    var onHover: ((Bool) -> Void)?
 
     var isActive = false {
         didSet { needsDisplay = true }
     }
 
-    init(image: NSImage, tooltip: String, size: CGFloat = 30, shortcut: String? = nil, handler: @escaping () -> Void) {
+    /// `tooltip` nil leaves the system tooltip off, for buttons that show their own hover card.
+    init(image: NSImage, tooltip: String?, size: CGFloat = 30, handler: @escaping () -> Void) {
         self.handler = handler
-        self.shortcut = shortcut.map { NSAttributedString(string: $0, attributes: [.font: Self.shortcutFont]) }
-        iconWidth = max(24, ceil(image.size.width) + 4)
-        let width = self.shortcut.map { [iconWidth] in max(size, iconWidth + ceil($0.size().width) + 3) } ?? size
-        super.init(frame: CGRect(x: 0, y: 0, width: width, height: size))
+        super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
         self.image = image
         toolTip = tooltip
         isBordered = false
@@ -117,7 +111,7 @@ final class ChromeButton: NSButton {
         target = self
         action = #selector(fire)
         translatesAutoresizingMaskIntoConstraints = false
-        widthAnchor.constraint(equalToConstant: width).isActive = true
+        widthAnchor.constraint(equalToConstant: size).isActive = true
         heightAnchor.constraint(equalToConstant: size).isActive = true
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
@@ -130,11 +124,13 @@ final class ChromeButton: NSButton {
         hovering = true
         needsDisplay = true
         NSCursor.arrow.set()
+        onHover?(true)
     }
 
     override func mouseExited(with event: NSEvent) {
         hovering = false
         needsDisplay = true
+        onHover?(false)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -145,35 +141,10 @@ final class ChromeButton: NSButton {
             NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6).fill()
         }
         contentTintColor = isActive ? selectionBlue : tint
-        guard let shortcut, let image else { return super.draw(dirtyRect) }
-
-        // Draw the icon ourselves so it sits left of the shortcut instead of centered in the wider button.
-        let color = contentTintColor ?? tint
-        let icon = image.isTemplate ? NSImage(size: image.size, flipped: false) { r in
-            image.draw(in: r)
-            color.set()
-            r.fill(using: .sourceAtop)
-            return true
-        } : image
-        let box = CGRect(x: 3, y: 0, width: iconWidth, height: bounds.height)
-        icon.draw(in: CGRect(x: (box.midX - image.size.width / 2).rounded(), y: (box.midY - image.size.height / 2).rounded(),
-                             width: image.size.width, height: image.size.height),
-                  from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-        let label = NSMutableAttributedString(attributedString: shortcut)
-        label.addAttribute(.foregroundColor, value: isActive ? selectionBlue : NSColor.secondaryLabelColor,
-                           range: NSRange(location: 0, length: label.length))
-        label.draw(at: CGPoint(x: box.maxX - 3, y: bounds.height - label.size().height - 2))
+        super.draw(dirtyRect)
     }
 
-    /// Center of the icon, in the button's coordinates.
-    var iconCenterX: CGFloat { shortcut == nil ? bounds.midX : 3 + iconWidth / 2 }
-
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
-
-func symbolImage(_ name: String, size: CGFloat = 15, weight: NSFont.Weight = .regular) -> NSImage {
-    let config = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
-    return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config) ?? NSImage()
 }
 
 /// The black "OCR" badge from iShot's toolbar; a template image so it follows the tint color.
@@ -194,6 +165,11 @@ func badgeImage(_ text: String) -> NSImage {
     return image
 }
 
+func symbolImage(_ name: String, size: CGFloat = 15, weight: NSFont.Weight = .regular) -> NSImage {
+    let config = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
+    return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config) ?? NSImage()
+}
+
 private func separator(height: CGFloat = 18) -> NSView {
     let line = NSBox()
     line.boxType = .separator
@@ -204,97 +180,180 @@ private func separator(height: CGFloat = 18) -> NSView {
 }
 
 enum ToolbarAction {
-    case tool(Tool), undo, redo, ocr, translate, redact, pin, longCapture, cancel, save, share, done
+    case tool(Tool), undo, ocr, translate, pin, longCapture, cancel, save, done
 
-    /// Key shown at the button's lower right. Buttons use a single key; ones without a customary
-    /// letter take the next digit (text 1, share 2). Undo, redo, save, cancel and done keep the
-    /// shortcuts everyone already knows.
-    var shortcut: String {
+    /// Buttons with a single key can have it changed; undo, save, cancel and done keep the shortcuts everyone knows.
+    var keyID: String? {
         switch self {
-        case let .tool(t): return t.key.uppercased()
-        case .undo: return "⌘Z"
-        case .redo: return "⇧⌘Z"
-        case .ocr: return "X"
-        case .translate: return "Y"
-        case .redact: return "B"
-        case .pin: return "T"
-        case .longCapture: return "S"
-        case .cancel: return "Esc"
-        case .save: return "⌘S"
-        case .share: return "2"
-        case .done: return "↩"
+        case let .tool(t): return t.rawValue
+        case .ocr: return "ocr"
+        case .translate: return "translate"
+        case .pin: return "pin"
+        case .longCapture: return "longCapture"
+        default: return nil
         }
     }
 
-    /// Non-tool buttons triggered by their unmodified single key.
-    static let singleKeyActions: [ToolbarAction] = [.ocr, .translate, .redact, .pin, .longCapture, .share]
+    /// Shown in the hover card.
+    var shortcut: String {
+        if let keyID { return ToolbarKeys.key(for: keyID).uppercased() }
+        switch self {
+        case .undo: return "⌘Z"
+        case .cancel: return "Esc"
+        case .save: return "⌘S"
+        case .done: return "↩"
+        default: return ""
+        }
+    }
+
+    var title: String {
+        switch self {
+        case let .tool(t): return t.title
+        case .undo: return "撤销"
+        case .ocr: return "识别文字"
+        case .translate: return "翻译到原位"
+        case .pin: return "贴到屏幕上"
+        case .longCapture: return "长截图"
+        case .cancel: return "退出截图"
+        case .save: return "保存"
+        case .done: return "复制到剪贴板"
+        }
+    }
+
+    /// An extra line under the shortcut, for what isn't obvious from the title.
+    var note: String? {
+        switch self {
+        case .ocr: return "结果可以编辑，再点复制"
+        case .translate: return "再按一次切换原文"
+        case .longCapture: return "在选区里滚动，自动拼接"
+        case .save: return "⇧⌘S 另存为"
+        case .done: return "也可以双击选区"
+        default: return nil
+        }
+    }
+
+    /// Every button that has a single key, in toolbar order.
+    static let keyed: [ToolbarAction] = Tool.allCases.map { .tool($0) } + [.ocr, .translate, .pin, .longCapture]
+
+    /// The button an unmodified key press triggers.
+    static func action(forKey key: String) -> ToolbarAction? {
+        keyed.first { $0.keyID.map(ToolbarKeys.key(for:)) == key }
+    }
 }
 
-/// Bottom toolbar: annotation tools | undo, redo | OCR, translate | cancel, save, done.
+/// The toolbar's single-key shortcuts, remembered across launches. A key belongs to one button at a time.
+enum ToolbarKeys {
+    private static let storageKey = "toolbar.keys"
+    static let defaults: [String: String] = Dictionary(uniqueKeysWithValues: Tool.allCases.map { ($0.rawValue, $0.defaultKey) })
+        .merging(["ocr": "x", "translate": "y", "pin": "t", "longCapture": "s"]) { a, _ in a }
+
+    private static var stored: [String: String] {
+        get { UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: storageKey) }
+    }
+
+    static func key(for id: String) -> String { stored[id] ?? defaults[id] ?? "" }
+
+    /// Letters and digits, typed without modifiers.
+    static func isAllowed(_ key: String) -> Bool {
+        key.count == 1 && key.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) }
+    }
+
+    /// Gives `key` to `id`. The button that had it takes `id`'s old key, so no two share one; returns that button's id.
+    @discardableResult
+    static func assign(_ key: String, to id: String) -> String? {
+        let old = self.key(for: id)
+        guard key != old else { return nil }
+        var all = defaults.merging(stored) { _, new in new }
+        let other = all.first { $0.key != id && $0.value == key }?.key
+        all[id] = key
+        if let other { all[other] = old }
+        stored = all
+        return other
+    }
+
+    static func reset() { stored = [:] }
+}
+
+/// Bottom toolbar: plain icons in one row, like iShot's. A button's name and shortcut appear in a card on hover.
 /// Turns vertical when there is no room under the selection, to sit beside it instead.
 final class ToolbarView: PanelView {
     private(set) var toolButtons: [Tool: ChromeButton] = [:]
     private(set) var translateButton: ChromeButton!
     private(set) var undoButton: ChromeButton!
-    private(set) var redoButton: ChromeButton!
     private let stack = NSStackView()
-    private var separators: [(width: NSLayoutConstraint, height: NSLayoutConstraint)] = []
     private(set) var isVertical = false
     /// Sizes of the horizontal and vertical layouts, measured once.
     private(set) var horizontalSize = CGSize.zero
     private(set) var verticalSize = CGSize.zero
+    /// Sits in the toolbar's superview so it can extend past the toolbar.
+    let hoverCard = HoverCardView()
 
     init(handler: @escaping (ToolbarAction) -> Void) {
         super.init(frame: .zero)
         stack.orientation = .horizontal
-        stack.spacing = 2
-        stack.edgeInsets = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
+        stack.spacing = 4
         addSubview(stack)
 
-        for tool in Tool.allCases {
-            let button = ChromeButton(image: symbolImage(tool.symbol), tooltip: "\(tool.title)  \(tool.key.uppercased())",
-                                      shortcut: ToolbarAction.tool(tool).shortcut) {
-                handler(.tool(tool))
+        func add(_ action: ToolbarAction, _ image: NSImage) -> ChromeButton {
+            let button = ChromeButton(image: image, tooltip: nil, size: 32) { handler(action) }
+            button.onHover = { [unowned self, unowned button] inside in
+                inside ? self.showCard(for: action, at: button) : self.scheduleHide()
             }
-            toolButtons[tool] = button
             stack.addArrangedSubview(button)
+            return button
         }
-        addSeparator()
-        undoButton = ChromeButton(image: symbolImage("arrow.uturn.backward"), tooltip: "撤销  ⌘Z", shortcut: ToolbarAction.undo.shortcut) { handler(.undo) }
-        redoButton = ChromeButton(image: symbolImage("arrow.uturn.forward"), tooltip: "重做  ⇧⌘Z", shortcut: ToolbarAction.redo.shortcut) { handler(.redo) }
-        stack.addArrangedSubview(undoButton)
-        stack.addArrangedSubview(redoButton)
-        addSeparator()
-        stack.addArrangedSubview(ChromeButton(image: badgeImage("OCR"), tooltip: "识别文字  X", shortcut: ToolbarAction.ocr.shortcut) { handler(.ocr) })
-        translateButton = ChromeButton(image: symbolImage("translate"), tooltip: "翻译到原位  Y\n再按一次切换原文，按住 ⌥ 临时查看原文", shortcut: ToolbarAction.translate.shortcut) { handler(.translate) }
-        stack.addArrangedSubview(translateButton)
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("eye.slash"), tooltip: "智能打码  B\n自动遮住手机号、邮箱、身份证号、银行卡号和密钥", shortcut: ToolbarAction.redact.shortcut) { handler(.redact) })
-        addSeparator()
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("pin"), tooltip: "贴到屏幕上  T", shortcut: ToolbarAction.pin.shortcut) { handler(.pin) })
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("arrow.up.and.down.text.horizontal"), tooltip: "长截图  S\n在选区里滚动，自动拼接成长图", shortcut: ToolbarAction.longCapture.shortcut) { handler(.longCapture) })
-        addSeparator()
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("xmark"), tooltip: "退出截图  Esc", shortcut: ToolbarAction.cancel.shortcut) { handler(.cancel) })
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("square.and.arrow.down"), tooltip: "保存  ⌘S\n另存为  ⇧⌘S", shortcut: ToolbarAction.save.shortcut) { handler(.save) })
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("square.and.arrow.up"), tooltip: "分享  2\n隔空投送、邮件、信息、备忘录…", shortcut: ToolbarAction.share.shortcut) { handler(.share) })
-        let done = ChromeButton(image: symbolImage("checkmark", weight: .semibold), tooltip: "复制到剪贴板  Return / 双击选区", shortcut: ToolbarAction.done.shortcut) { handler(.done) }
-        done.tint = selectionBlue
-        stack.addArrangedSubview(done)
+        for tool in Tool.allCases {
+            toolButtons[tool] = add(.tool(tool), symbolImage(tool.symbol, size: 16, weight: .light))
+        }
+        undoButton = add(.undo, symbolImage("arrow.uturn.backward", size: 16, weight: .light))
+        _ = add(.ocr, badgeImage("OCR"))
+        translateButton = add(.translate, symbolImage("translate", size: 16, weight: .light))
+        _ = add(.pin, symbolImage("pin", size: 16, weight: .light))
+        _ = add(.longCapture, symbolImage("arrow.up.and.down.text.horizontal", size: 16, weight: .light))
+        _ = add(.cancel, symbolImage("xmark", size: 16, weight: .light))
+        _ = add(.save, symbolImage("square.and.arrow.down", size: 16, weight: .light))
+        add(.done, symbolImage("checkmark", size: 16, weight: .regular)).tint = selectionBlue
         setVertical(true)
         verticalSize = frame.size
         setVertical(false)
         horizontalSize = frame.size
+        hoverCard.onHover = { [unowned self] inside in
+            if inside { self.cancelHide() } else if !self.hoverCard.isRecording { self.scheduleHide() }
+        }
+        hoverCard.onPick = { [unowned self] key in
+            guard let action = self.cardAction, let id = action.keyID else { return }
+            let other = ToolbarKeys.assign(key, to: id)
+            let swapped = other.flatMap { id in ToolbarAction.keyed.first { $0.keyID == id } }
+            self.hoverCard.configure(title: action.title, shortcut: action.shortcut, editable: true,
+                                     note: swapped.map { "已和「\($0.title)」互换，它现在是 \($0.shortcut)" } ?? action.note)
+            self.placeCard()
+        }
+    }
+
+    /// The button the card is showing.
+    private var cardAction: ToolbarAction?
+    private weak var cardButton: ChromeButton?
+    private var hideWork: DispatchWorkItem?
+
+    /// Leaves time to move the pointer from the button onto the card.
+    private func scheduleHide() {
+        hideWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.hoverCard.hide() }
+        hideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    private func cancelHide() {
+        hideWork?.cancel()
+        hideWork = nil
     }
 
     func setVertical(_ vertical: Bool) {
         isVertical = vertical
         stack.orientation = vertical ? .vertical : .horizontal
-        // Leading in a column lines up the icons, which sit at the left of buttons with a shortcut.
-        stack.alignment = vertical ? .leading : .centerY
-        stack.edgeInsets = vertical ? NSEdgeInsets(top: 6, left: 4, bottom: 6, right: 4) : NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
-        for s in separators {
-            s.width.constant = vertical ? 22 : 1
-            s.height.constant = vertical ? 1 : 18
-        }
+        stack.alignment = vertical ? .centerX : .centerY
+        stack.edgeInsets = vertical ? NSEdgeInsets(top: 8, left: 6, bottom: 8, right: 6) : NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
         setFrameSize(stack.fittingSize)
         stack.frame = bounds
         // Lay out now: the style bar's caret uses the button positions before the toolbar is first drawn.
@@ -303,31 +362,208 @@ final class ToolbarView: PanelView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    private func addSeparator() {
-        stack.setCustomSpacing(6, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 1])
-        let line = separator()
-        let constraints = line.constraints.filter { $0.firstAttribute == .width || $0.firstAttribute == .height }
-        separators.append((constraints.first { $0.firstAttribute == .width }!, constraints.first { $0.firstAttribute == .height }!))
-        stack.addArrangedSubview(line)
-        stack.setCustomSpacing(6, after: line)
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        hoverCard.removeFromSuperview()
+        superview?.addSubview(hoverCard)
+    }
+
+    // The card belongs to the button under the pointer; any move or hide of the toolbar drops it.
+    override var isHidden: Bool {
+        didSet { if isHidden { hoverCard.hide() } }
+    }
+
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        if newOrigin != frame.origin { hoverCard.hide() }
+        super.setFrameOrigin(newOrigin)
+    }
+
+    /// Above the button for a row (below if there's no room); for a column, on whichever side has room.
+    func showCard(for action: ToolbarAction, at button: ChromeButton) {
+        guard superview != nil else { return }
+        cancelHide()
+        hoverCard.hide()
+        cardAction = action
+        cardButton = button
+        hoverCard.configure(title: action.title, shortcut: action.shortcut, editable: action.keyID != nil, note: action.note)
+        placeCard()
+        hoverCard.isHidden = false
+    }
+
+    /// Positions the card for its button; again whenever its size changes.
+    private func placeCard() {
+        guard let container = superview, let button = cardButton else { return }
+        let size = hoverCard.frame.size
+        let b = button.convert(button.bounds, to: container)
+        let bounds = container.bounds
+        var origin: CGPoint
+        if isVertical {
+            origin = CGPoint(x: frame.maxX + 8, y: b.midY - size.height / 2)
+            if origin.x + size.width > bounds.maxX - 4 { origin.x = frame.minX - 8 - size.width }
+        } else {
+            // The container is flipped: smaller y is higher on screen.
+            origin = CGPoint(x: b.midX - size.width / 2, y: frame.minY - 8 - size.height)
+            if origin.y < 4 { origin.y = frame.maxY + 8 }
+        }
+        origin.x = min(max(4, origin.x), bounds.maxX - size.width - 4)
+        origin.y = min(max(4, origin.y), bounds.maxY - size.height - 4)
+        hoverCard.setFrameOrigin(origin)
     }
 
     func setActiveTool(_ tool: Tool?) {
         for (t, button) in toolButtons { button.isActive = t == tool }
     }
 
-    func setHistory(canUndo: Bool, canRedo: Bool) {
+    func setCanUndo(_ canUndo: Bool) {
         undoButton.isEnabled = canUndo
-        redoButton.isEnabled = canRedo
         undoButton.alphaValue = canUndo ? 1 : 0.35
-        redoButton.alphaValue = canRedo ? 1 : 0.35
     }
 
     /// Center of a tool button's icon, in toolbar coordinates.
     func anchor(for tool: Tool) -> CGPoint? {
         guard let button = toolButtons[tool] else { return nil }
         let frame = button.convert(button.bounds, to: self)
-        return CGPoint(x: frame.minX + button.iconCenterX, y: frame.midY)
+        return CGPoint(x: frame.midX, y: frame.midY)
+    }
+}
+
+/// Dark card with a button's name, its shortcut in a key cap, and an optional note, like iShot's.
+/// Clicking the key cap of a single-key button waits for a new key.
+final class HoverCardView: PanelView {
+    private let title = NSTextField(labelWithString: "")
+    private let shortcutLabel = NSTextField(labelWithString: "快捷键")
+    private let keyCap = NSView()
+    private let key = NSTextField(labelWithString: "")
+    private let note = NSTextField(labelWithString: "")
+    private var editable = false
+    private var shortcut = ""
+    private var noteText: String?
+    private(set) var isRecording = false
+    var onHover: ((Bool) -> Void)?
+    /// A new key (lowercase letter or digit) was pressed while recording.
+    var onPick: ((String) -> Void)?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        fill = NSColor(white: 0.16, alpha: 0.96)
+        radius = 8
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        title.textColor = .white
+        shortcutLabel.font = .systemFont(ofSize: 12)
+        shortcutLabel.textColor = NSColor.white.withAlphaComponent(0.7)
+        key.font = .monospacedSystemFont(ofSize: 12, weight: .medium)
+        key.textColor = .black
+        key.alignment = .center
+        keyCap.wantsLayer = true
+        keyCap.layer?.cornerRadius = 4
+        keyCap.addSubview(key)
+        note.font = .systemFont(ofSize: 11)
+        note.textColor = NSColor.white.withAlphaComponent(0.55)
+        for view in [title, shortcutLabel, keyCap, note] { addSubview(view) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect], owner: self))
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var acceptsFirstResponder: Bool { isRecording }
+
+    /// A click elsewhere takes the keyboard back: stop waiting for a key.
+    override func resignFirstResponder() -> Bool {
+        if isRecording {
+            isRecording = false
+            layoutContent()
+            onHover?(false)
+        }
+        return true
+    }
+
+    func configure(title text: String, shortcut: String, editable: Bool, note noteText: String?) {
+        self.shortcut = shortcut
+        self.editable = editable
+        self.noteText = noteText
+        title.stringValue = text
+        layoutContent()
+    }
+
+    private func layoutContent() {
+        key.stringValue = isRecording ? "按下新按键" : shortcut
+        keyCap.layer?.backgroundColor = (isRecording ? selectionBlue : NSColor.white).cgColor
+        key.textColor = isRecording ? .white : .black
+        let hint = editable && !isRecording ? "点击按键可修改" : nil
+        let lines = [isRecording ? "Esc 取消" : noteText, hint].compactMap { $0 }
+        note.stringValue = lines.joined(separator: "\n")
+        note.isHidden = lines.isEmpty
+        let pad: CGFloat = 12
+        let t = title.fittingSize, s = shortcutLabel.fittingSize, k = key.fittingSize, n = note.fittingSize
+        title.frame = CGRect(x: pad, y: 9, width: t.width, height: t.height)
+        let rowY = title.frame.maxY + 7
+        let keySize = CGSize(width: max(24, k.width + 12), height: 20)
+        shortcutLabel.frame = CGRect(x: pad, y: rowY + (keySize.height - s.height) / 2, width: s.width, height: s.height)
+        keyCap.frame = CGRect(origin: CGPoint(x: shortcutLabel.frame.maxX + 8, y: rowY), size: keySize)
+        key.frame = CGRect(x: 0, y: (keySize.height - k.height) / 2, width: keySize.width, height: k.height)
+        var height = rowY + keySize.height + 10
+        var width = max(t.width, keyCap.frame.maxX - pad)
+        if !lines.isEmpty {
+            note.frame = CGRect(x: pad, y: height - 3, width: n.width, height: n.height)
+            height = note.frame.maxY + 9
+            width = max(width, n.width)
+        }
+        setFrameSize(CGSize(width: ceil(width + pad * 2), height: ceil(height)))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.arrow.set()
+        onHover?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+
+    override func mouseMoved(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        (editable && keyCap.frame.contains(p) ? NSCursor.pointingHand : NSCursor.arrow).set()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        guard editable, !isRecording, keyCap.frame.insetBy(dx: -4, dy: -4).contains(p) else { return }
+        startRecording()
+    }
+
+    func startRecording() {
+        isRecording = true
+        layoutContent()
+        window?.makeFirstResponder(self)
+    }
+
+    private func stopRecording() {
+        guard isRecording else { return }
+        isRecording = false
+        layoutContent()
+        // Hand the keyboard back to the capture view.
+        if window?.firstResponder === self { window?.makeFirstResponder(superview) }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard isRecording else { return super.keyDown(with: event) }
+        if event.keyCode == 53 {
+            stopRecording()
+            return
+        }
+        let flags = event.modifierFlags.intersection([.command, .option, .control])
+        let typed = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        guard flags.isEmpty, ToolbarKeys.isAllowed(typed) else {
+            NSSound.beep()
+            return
+        }
+        isRecording = false
+        onPick?(typed)
+        if window?.firstResponder === self { window?.makeFirstResponder(superview) }
+    }
+
+    func hide() {
+        stopRecording()
+        isHidden = true
     }
 }
 
@@ -477,7 +713,7 @@ final class StyleBarView: PanelView {
 
     /// Rebuilds the controls when the tool (or mosaic mode) changes, otherwise just refreshes state.
     func configure(_ state: StyleState) {
-        guard configuredTool != state.tool || (state.tool.usesAreaModes && configuredMode != state.mosaicMode) else {
+        guard configuredTool != state.tool || (state.tool == .mosaic && configuredMode != state.mosaicMode) else {
             update(state)
             return
         }
@@ -494,19 +730,17 @@ final class StyleBarView: PanelView {
         textButtons = [:]
         roundedButton = nil
 
-        if state.tool.usesAreaModes {
+        if state.tool == .mosaic {
             for (mode, symbol, tip) in [(MosaicMode.brush, "paintbrush.pointed", "画笔涂抹"), (.rect, "rectangle.dashed", "框选区域")] {
                 let b = ChromeButton(image: symbolImage(symbol, size: 13), tooltip: tip, size: 28) { [unowned self] in self.handler(.mosaicMode(mode)) }
                 modeButtons[mode] = b
                 stack.addArrangedSubview(b)
             }
-            if state.tool == .mosaic {
-                stack.addArrangedSubview(separator(height: 16))
-                for (effect, symbol, tip) in [(MosaicEffect.pixelate, "square.grid.3x3.fill", "格子"), (.blur, "drop.fill", "毛玻璃")] {
-                    let b = ChromeButton(image: symbolImage(symbol, size: 13), tooltip: tip, size: 28) { [unowned self] in self.handler(.mosaicEffect(effect)) }
-                    effectButtons[effect] = b
-                    stack.addArrangedSubview(b)
-                }
+            stack.addArrangedSubview(separator(height: 16))
+            for (effect, symbol, tip) in [(MosaicEffect.pixelate, "square.grid.3x3.fill", "格子"), (.blur, "drop.fill", "毛玻璃")] {
+                let b = ChromeButton(image: symbolImage(symbol, size: 13), tooltip: tip, size: 28) { [unowned self] in self.handler(.mosaicEffect(effect)) }
+                effectButtons[effect] = b
+                stack.addArrangedSubview(b)
             }
             if state.mosaicMode == .brush {
                 stack.addArrangedSubview(separator(height: 16))
@@ -548,7 +782,7 @@ final class StyleBarView: PanelView {
                 headButtons[head] = add(OptionIcon.arrow(head), tip) { $0.arrowHead = head }
             }
         }
-        if [.rectangle, .ellipse, .line, .arrow, .pen].contains(tool) {
+        if [.rectangle, .arrow, .pen].contains(tool) {
             stack.addArrangedSubview(separator(height: 16))
             for (dash, tip) in [(DashStyle.solid, "实线"), (.dashed, "虚线"), (.dotted, "点线")] {
                 dashButtons[dash] = add(OptionIcon.dash(dash), tip) { $0.dash = dash }
@@ -638,80 +872,18 @@ extension NSColor {
     }
 }
 
-/// Blue bar above the selection: size in points (editable), aspect ratio lock, corner radius slider, shadow toggle.
-final class TopBarView: PanelView, NSTextFieldDelegate {
-    private let sizeLabel = NSTextField(string: "")
-    private let ratioButton = NSButton(title: "", target: nil, action: nil)
-    private let backdropButton = NSButton(title: "", target: nil, action: nil)
-    var onBackdrop: ((Int?) -> Void)?
-    private var backdropIndex: Int? = StyleMemory.backdrop
-    private var sizeWidth: NSLayoutConstraint!
-    private(set) var ratio: AspectRatio?
-    var onSize: ((CGSize) -> Void)?
-    var onRatio: ((AspectRatio?) -> Void)?
-    var onEndEditing: (() -> Void)?
-    private let radiusIcon = NSImageView(image: symbolImage("square.dashed", size: 11))
-    private let slider = NSSlider(value: 0, minValue: 0, maxValue: 30, target: nil, action: nil)
-    private let shadowBox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
-    private let stack = NSStackView()
-    private let onRadius: (Double) -> Void
-    private let onShadow: (Bool) -> Void
+/// Blue bar above the selection showing its size in points.
+final class TopBarView: PanelView {
+    private let sizeLabel = NSTextField(labelWithString: "")
 
-    init(radius: Double, shadow: Bool, ratio: AspectRatio?, onRadius: @escaping (Double) -> Void, onShadow: @escaping (Bool) -> Void) {
-        self.onRadius = onRadius
-        self.onShadow = onShadow
-        self.ratio = ratio
-        super.init(frame: .zero)
+    override init(frame: CGRect) {
+        super.init(frame: frame)
         fill = selectionBlue
-        self.radius = 6
+        radius = 6
         layer?.shadowOpacity = 0
         sizeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
         sizeLabel.textColor = .white
-        sizeLabel.isBordered = false
-        sizeLabel.drawsBackground = false
-        sizeLabel.focusRingType = .none
-        sizeLabel.isEditable = false
-        sizeLabel.delegate = self
-        sizeLabel.target = self
-        sizeLabel.action = #selector(sizeEntered)
-        sizeLabel.toolTip = "点击输入宽 × 高，回车应用"
-        sizeLabel.cell?.sendsActionOnEndEditing = false
-        sizeWidth = sizeLabel.widthAnchor.constraint(equalToConstant: 80)
-        sizeWidth.isActive = true
-        ratioButton.isBordered = false
-        ratioButton.target = self
-        ratioButton.action = #selector(nextRatio)
-        ratioButton.toolTip = "锁定比例：点击切换 自由 → 1:1 → 4:3 → 3:4 → 16:9 → 9:16 → 3:2 → 2:3"
-        updateRatioTitle()
-        radiusIcon.contentTintColor = .white
-        radiusIcon.toolTip = "圆角"
-        slider.controlSize = .mini
-        slider.doubleValue = radius
-        slider.toolTip = "圆角"
-        slider.target = self
-        slider.action = #selector(radiusChanged)
-        shadowBox.attributedTitle = NSAttributedString(string: "阴影", attributes: [
-            .foregroundColor: NSColor.white, .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-        ])
-        shadowBox.state = shadow ? .on : .off
-        shadowBox.target = self
-        shadowBox.action = #selector(shadowChanged)
-        shadowBox.controlSize = .small
-        shadowBox.toolTip = "导出时加投影（仅 PNG）"
-
-        backdropButton.isBordered = false
-        backdropButton.target = self
-        backdropButton.action = #selector(nextBackdrop)
-        backdropButton.toolTip = "美化：导出时把截图放在背景上并加边距。点击切换 关 → 紫蓝 → 橙粉 → 青绿 → 石墨 → 浅灰"
-        updateBackdropTitle()
-        [sizeLabel, ratioButton, radiusIcon, slider, shadowBox, backdropButton].forEach { stack.addArrangedSubview($0) }
-        stack.spacing = 6
-        stack.setCustomSpacing(8, after: sizeLabel)
-        stack.setCustomSpacing(12, after: ratioButton)
-        stack.setCustomSpacing(12, after: slider)
-        stack.edgeInsets = NSEdgeInsets(top: 3, left: 9, bottom: 3, right: 9)
-        slider.widthAnchor.constraint(equalToConstant: 72).isActive = true
-        addSubview(stack)
+        addSubview(sizeLabel)
         setSize(.zero)
     }
 
@@ -722,119 +894,12 @@ final class TopBarView: PanelView, NSTextFieldDelegate {
         NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
     }
 
-    var isEditingSize: Bool { sizeLabel.currentEditor() != nil }
-
     func setSize(_ size: CGSize) {
-        guard !isEditingSize else { return }
         sizeLabel.stringValue = "\(Int(size.width.rounded())) × \(Int(size.height.rounded()))"
-        fitSizeField()
-        fit()
+        let text = sizeLabel.fittingSize
+        setFrameSize(CGSize(width: ceil(text.width) + 18, height: 24))
+        sizeLabel.frame = CGRect(x: 9, y: (24 - text.height) / 2, width: ceil(text.width), height: text.height)
     }
-
-    private func fitSizeField() {
-        let text = NSAttributedString(string: sizeLabel.stringValue + "0", attributes: [.font: sizeLabel.font!])
-        sizeWidth.constant = max(60, ceil(text.size().width) + 6)
-    }
-
-    /// Clicking the size starts editing it; only once there is a selection.
-    override func mouseDown(with event: NSEvent) {
-        let p = convert(event.locationInWindow, from: nil)
-        guard sizeLabel.isEditable, sizeLabel.frame.insetBy(dx: -4, dy: -4).contains(convert(p, to: stack)) else { return }
-        beginEditingSize()
-    }
-
-    func beginEditingSize() {
-        guard sizeLabel.isEditable else { return }
-        window?.makeFirstResponder(sizeLabel)
-        sizeLabel.currentEditor()?.selectAll(nil)
-    }
-
-    @objc private func sizeEntered() {
-        let parsed = SizeText.parse(sizeLabel.stringValue)
-        window?.makeFirstResponder(nil)
-        if let parsed { onSize?(parsed) }
-        onEndEditing?()
-    }
-
-    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-        if selector == #selector(NSResponder.cancelOperation(_:)) {
-            window?.makeFirstResponder(nil)
-            onEndEditing?()
-            return true
-        }
-        return false
-    }
-
-    @objc private func nextBackdrop() {
-        if let i = backdropIndex {
-            backdropIndex = i + 1 < Backdrop.presets.count ? i + 1 : nil
-        } else {
-            backdropIndex = 0
-        }
-        updateBackdropTitle()
-        fit()
-        onBackdrop?(backdropIndex)
-    }
-
-    private func updateBackdropTitle() {
-        let title = backdropIndex.map { Backdrop.presets[$0].title } ?? "背景"
-        backdropButton.image = symbolImage("sparkles", size: 11)
-        backdropButton.imagePosition = .imageLeading
-        backdropButton.contentTintColor = .white
-        backdropButton.attributedTitle = NSAttributedString(string: title, attributes: [
-            .foregroundColor: NSColor.white.withAlphaComponent(backdropIndex == nil ? 0.75 : 1),
-            .font: NSFont.systemFont(ofSize: 11, weight: backdropIndex == nil ? .regular : .bold),
-        ])
-    }
-
-    @objc private func nextRatio() {
-        let presets = AspectRatio.presets
-        if let ratio, let i = presets.firstIndex(of: ratio) {
-            self.ratio = i + 1 < presets.count ? presets[i + 1] : nil
-        } else {
-            ratio = presets.first
-        }
-        updateRatioTitle()
-        fit()
-        onRatio?(ratio)
-    }
-
-    func setRatio(_ ratio: AspectRatio?) {
-        self.ratio = ratio
-        updateRatioTitle()
-        fit()
-    }
-
-    private func updateRatioTitle() {
-        let title = ratio?.label ?? "自由"
-        ratioButton.image = symbolImage("aspectratio", size: 11)
-        ratioButton.imagePosition = .imageLeading
-        ratioButton.contentTintColor = .white
-        ratioButton.attributedTitle = NSAttributedString(string: title, attributes: [
-            .foregroundColor: NSColor.white.withAlphaComponent(ratio == nil ? 0.75 : 1),
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: ratio == nil ? .regular : .bold),
-        ])
-    }
-
-    func setControlsVisible(_ visible: Bool) {
-        sizeLabel.isEditable = visible
-        guard slider.isHidden == visible else { return }
-        ratioButton.isHidden = !visible
-        backdropButton.isHidden = !visible
-        radiusIcon.isHidden = !visible
-        slider.isHidden = !visible
-        shadowBox.isHidden = !visible
-        fit()
-    }
-
-    private func fit() {
-        let size = stack.fittingSize
-        setFrameSize(CGSize(width: size.width, height: 24))
-        stack.frame = bounds
-    }
-
-    @objc private func radiusChanged() { onRadius(slider.doubleValue) }
-    @objc private func shadowChanged() { onShadow(shadowBox.state == .on) }
 }
 
 /// Short status message.
@@ -896,9 +961,6 @@ final class OCRPanelView: PanelView {
     private let copyButton = NSButton(title: "复制", target: nil, action: nil)
     private var closeButton: ChromeButton!
     private var resetWork: DispatchWorkItem?
-    /// 文本 / 表格 / 代码: how the recognized lines are put together.
-    let formatControl = NSSegmentedControl(labels: ["文本", "表格", "代码"], trackingMode: .selectOne, target: nil, action: nil)
-    var onFormat: ((Int) -> Void)?
 
     init(onClose: @escaping () -> Void) {
         textView = NSTextView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
@@ -928,15 +990,6 @@ final class OCRPanelView: PanelView {
         scroll.frame = CGRect(x: 12, y: 38, width: 316, height: 178)
         addSubview(scroll)
 
-        formatControl.selectedSegment = 0
-        formatControl.controlSize = .small
-        formatControl.target = self
-        formatControl.action = #selector(formatChanged)
-        formatControl.toolTip = "表格：按行列整理成 Markdown 表格；代码：保留每行的缩进"
-        formatControl.sizeToFit()
-        formatControl.frame.origin = CGPoint(x: 12, y: 228)
-        addSubview(formatControl)
-
         copyButton.bezelStyle = .push
         copyButton.frame = CGRect(x: 340 - 12 - 90, y: 224, width: 90, height: 28)
         copyButton.target = self
@@ -946,21 +999,11 @@ final class OCRPanelView: PanelView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(text: String, lineCount: Int, format: Int = 0) {
+    func show(text: String, lineCount: Int) {
         textView.string = text
-        formatControl.selectedSegment = format
-        title.stringValue = "识别结果 · \(lineCount) 行 · 已复制"
-        flashCopied()
-    }
-
-    @objc private func formatChanged() {
-        onFormat?(formatControl.selectedSegment)
-    }
-
-    /// Replaces the text with another format of the same recognition and copies it.
-    func replace(text: String) {
-        textView.string = text
-        copyText()
+        title.stringValue = "识别结果 · \(lineCount) 行"
+        resetWork?.cancel()
+        copyButton.title = "复制"
     }
 
     @objc func copyText() {

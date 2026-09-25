@@ -6,14 +6,9 @@ import SnapCore
 enum StyleMemory {
     private static let defaults = UserDefaults.standard
 
-    /// Red for most tools; the highlighter starts yellow.
-    static func defaultColor(for tool: Tool) -> NSColor {
-        tool == .highlighter ? StyleState.palette[2] : StyleState.palette[0]
-    }
-
     static func color(for tool: Tool) -> NSColor {
         guard let rgba = (defaults.dictionary(forKey: "style.colors") as? [String: [Double]])?[tool.rawValue], rgba.count == 4 else {
-            return defaultColor(for: tool)
+            return StyleState.palette[0]
         }
         return NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
     }
@@ -45,24 +40,11 @@ enum StyleMemory {
         set { defaults.set(Dictionary(uniqueKeysWithValues: newValue.map { ($0.key.rawValue, Double($0.value)) }), forKey: "style.sizes") }
     }
     static var mosaicMode: MosaicMode = .brush
-    static var eraserMode: MosaicMode = .brush
     static var mosaicEffect: MosaicEffect = .pixelate
     static var hexColor = true
     static var lastSelection: [CGDirectDisplayID: CGRect] = [:]
-    /// Index into `Backdrop.presets`, or nil for no backdrop; remembered across launches.
-    static var backdrop: Int? {
-        get { UserDefaults.standard.object(forKey: "output.backdrop") as? Int }
-        set { UserDefaults.standard.set(newValue, forKey: "output.backdrop") }
-    }
-    /// Locked selection shape, remembered across launches like Snipaste does.
-    static var aspectRatio: AspectRatio? {
-        get { AspectRatio(UserDefaults.standard.string(forKey: "capture.aspectRatio") ?? "") }
-        set { UserDefaults.standard.set(newValue?.label, forKey: "capture.aspectRatio") }
-    }
 
     static func size(for tool: Tool) -> CGFloat { sizes[tool] ?? tool.defaultSize }
-    static func areaMode(for tool: Tool) -> MosaicMode { tool == .eraser ? eraserMode : mosaicMode }
-    static func areaEffect(for tool: Tool) -> MosaicEffect { tool == .eraser ? .original : mosaicEffect }
 }
 
 private enum Drag {
@@ -88,15 +70,11 @@ enum OutputAction {
     case apply
 }
 
-/// A normal screenshot, a whiteboard (drawing on a solid canvas), or a transparent board over the live screen.
+/// A normal screenshot, or annotating a pin.
 enum CaptureMode: Equatable {
     case screenshot
-    case whiteboard
-    case transparentBoard
     /// Annotating a pin: the pin's image is the canvas, everything else stays live and untouched.
     case pinEdit
-
-    var isBoard: Bool { self != .screenshot }
 }
 
 /// Transparent overlay for one display: dimming, selection, annotations, magnifier and toolbar.
@@ -110,8 +88,7 @@ final class CaptureView: NSView {
     private let windowRects: [CGRect]
     private var effectImages: [MosaicEffect: NSImage] = [:]
     private var renderer: ContentRenderer {
-        ContentRenderer(base: baseImage, bounds: bounds, effect: { [unowned self] in self.effectImage($0) },
-                        cursor: showsCursor ? capturedCursor : nil)
+        ContentRenderer(base: baseImage, bounds: bounds, effect: { [unowned self] in self.effectImage($0) })
     }
 
     /// Pixels per point of the frozen image.
@@ -137,58 +114,33 @@ final class CaptureView: NSView {
     private var coalesceWork: DispatchWorkItem?
     private var scrollAccumulator: CGFloat = 0
     private var tool: Tool?
-    /// Corners placed so far while clicking out a polyline with the line or arrow tool.
-    private var polyPoints: [CGPoint]?
     private var textEditor: TextEditorView?
     private var editingID: UUID?
-    private var editingCaptionOf: UUID?
     private var editingColor = StyleMemory.color(for: .text)
     private var editingSize = StyleMemory.size(for: .text)
     private var editingStyle = StyleMemory.style(for: .text)
 
-    private var cornerRadius = CGFloat(Settings.shared.cornerRadius)
-    private var shadowEnabled = Settings.shared.shadowEnabled
-
-    // OCR and translation
+    // Translation
     private var recognition: (rect: CGRect, result: RecognitionResult)?
     private var translationState = TranslationState.none
     private var recognitionTask: Task<Void, Never>?
     private var pendingBlockRects: [CGRect] = []
     private var shimmerTimer: Timer?
     private var shimmerStart = Date()
-    private var peekingOriginal = false
     private var ocrBoxesVisible = false
 
     // Chrome
     private lazy var toolbar = ToolbarView { [unowned self] in self.handle($0) }
     private lazy var styleBar = StyleBarView { [unowned self] in self.applyStyle($0) }
-    private lazy var topBar = TopBarView(
-        radius: Double(cornerRadius), shadow: shadowEnabled, ratio: StyleMemory.aspectRatio,
-        onRadius: { [unowned self] in
-            self.cornerRadius = CGFloat($0)
-            Settings.shared.cornerRadius = $0
-            self.needsDisplay = true
-        },
-        onShadow: { [unowned self] in
-            self.shadowEnabled = $0
-            Settings.shared.shadowEnabled = $0
-        })
+    private let topBar = TopBarView()
     private let toast = ToastView()
-    private lazy var ocrPanel: OCRPanelView = OCRPanelView { [unowned self] in self.closeOCRPanel() }
+    private lazy var ocrPanel = OCRPanelView { [unowned self] in self.closeOCRPanel() }
     private lazy var magnifier = MagnifierView(snapshot: snapshot, viewSize: bounds.size)
 
-    /// The pointer captured with this screen, and whether it is currently part of the picture (toggled with `).
-    private let capturedCursor: CapturedCursor?
-    private var showsCursor = Settings.shared.captureCursor
-
     let mode: CaptureMode
-    /// In a board, Esc has to be pressed twice in a row to leave, so a stray Esc doesn't wipe the drawing.
-    private var escapeArmed = false
 
-    init(frame: CGRect, snapshot: CGImage, windowRects: [CGRect], displayID: CGDirectDisplayID, cursor: CapturedCursor? = nil,
-         mode: CaptureMode = .screenshot) {
+    init(frame: CGRect, snapshot: CGImage, windowRects: [CGRect], displayID: CGDirectDisplayID, mode: CaptureMode = .screenshot) {
         self.mode = mode
-        self.capturedCursor = cursor
         self.snapshot = snapshot
         self.baseImage = NSImage(cgImage: snapshot, size: frame.size)
         self.windowRects = windowRects
@@ -201,14 +153,6 @@ final class CaptureView: NSView {
             addSubview(view)
         }
         magnifier.showHex = StyleMemory.hexColor
-        ocrPanel.onFormat = { [unowned self] in self.reformatOCR($0) }
-        topBar.onSize = { [unowned self] in self.applyTypedSize($0) }
-        topBar.onRatio = { [unowned self] in self.applyRatio($0) }
-        topBar.onEndEditing = { [unowned self] in self.window?.makeFirstResponder(self) }
-        topBar.onBackdrop = { [unowned self] index in
-            StyleMemory.backdrop = index
-            self.showToast(index.map { "导出时加「\(Backdrop.presets[$0].title)」背景和边距" } ?? "导出时不加背景", duration: 1.5)
-        }
         updateHistoryButtons()
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self))
     }
@@ -221,46 +165,6 @@ final class CaptureView: NSView {
 
     var snapshotImage: CGImage { snapshot }
     var testing_selection: CGRect? { hasSelection ? selection : nil }
-    /// The history entry this view was restored from, so re-outputting it unchanged doesn't store a duplicate.
-    private var replayedEntry: HistoryEntry?
-
-    func historyEntry() -> HistoryEntry? {
-        guard hasSelection, selection.width >= 1, selection.height >= 1 else { return nil }
-        commitText()
-        if let replayedEntry, replayedEntry.selection == selection, replayedEntry.items == items { return nil }
-        return HistoryEntry(displayID: displayID, screenSize: bounds.size, selection: selection, items: items)
-    }
-
-    /// Shows a past capture: its selection and editable annotations.
-    /// `asReplay` false is for a refreshed screenshot, which should be recorded again when output.
-    func restore(_ entry: HistoryEntry, asReplay: Bool = true) {
-        replayedEntry = asReplay ? entry : nil
-        selection = entry.selection.intersection(bounds)
-        items = entry.items
-        undoStack = []
-        redoStack = []
-        commitSelection()
-        updateHistoryButtons()
-    }
-
-    private func toggleCursor() {
-        guard let capturedCursor else {
-            showToast("这块屏幕上没有鼠标指针")
-            return
-        }
-        showsCursor.toggle()
-        invalidate(capturedCursor.rect, margin: 2)
-        showToast(showsCursor ? "截图包含鼠标指针 · ` 切换" : "截图不含鼠标指针 · ` 切换", duration: 1.2)
-    }
-
-    var testing_showsCursor: Bool { showsCursor }
-
-    /// Selection and annotations as they are now, to carry over to a refreshed screenshot.
-    func currentState() -> HistoryEntry? {
-        guard hasSelection else { return nil }
-        commitText()
-        return HistoryEntry(displayID: displayID, screenSize: bounds.size, selection: selection, items: items)
-    }
 
     func showMessage(_ text: String, duration: TimeInterval = 2.5) {
         showToast(text, duration: duration)
@@ -296,14 +200,6 @@ final class CaptureView: NSView {
         return []
     }
 
-    /// Starts with `rect` (view coordinates) selected.
-    func preselect(_ rect: CGRect) {
-        let r = rect.intersection(bounds)
-        guard r.width >= 4, r.height >= 4 else { return }
-        selection = r
-        commitSelection()
-    }
-
     /// Pin editing: the pin's rect is the canvas.
     func startPinEdit(rect: CGRect) {
         selection = rect.intersection(bounds)
@@ -311,67 +207,32 @@ final class CaptureView: NSView {
         showToast("在贴图上标注 · ✓ 或回车完成 · Esc 放弃", duration: 2.5)
     }
 
-    /// Boards start with the whole screen selected and the pen in hand.
-    func startBoard() {
-        guard mode == .whiteboard || mode == .transparentBoard else { return }
-        selection = bounds
-        commitSelection()
-        setTool(.pen)
-        showToast(mode == .whiteboard ? "白板：直接画 · 空格显示/隐藏工具栏 · 连按两次 Esc 退出"
-                                      : "透明白板：在屏幕上直接画 · 空格显示/隐藏工具栏 · 连按两次 Esc 退出", duration: 3)
-    }
-
-    private var toolbarHiddenByUser = false
-
-    // UI element detection: the chain of elements under the pointer (innermost first) and how far out the wheel has gone.
-    private var hierarchy: ElementHierarchy?
-    private var detectElements = Settings.shared.detectElements
-    private var elementChain: [CGRect] = []
-    private var elementLevel = 0
-
-    func setElements(_ nodes: [UIElementNode]) {
-        setElements(ElementHierarchy(nodes: nodes))
-    }
-
-    func setElements(_ hierarchy: ElementHierarchy) {
-        self.hierarchy = hierarchy
-        primeCursor()
-    }
-
     var testing_hoverRect: CGRect? { hoverRect }
 
-    /// What to highlight at `p` before anything is selected: an element (and the wheel's chosen ancestor) or the window.
+    /// What to highlight at `p` before anything is selected: the window under it.
     private func hoverTarget(at p: CGPoint) -> CGRect? {
-        let window = windowRects.first { $0.contains(p) }
-        guard detectElements, let hierarchy else { return window }
-        let chain = hierarchy.chain(at: p, within: window)
-        if chain.first != elementChain.first { elementLevel = 0 }
-        elementChain = chain
-        guard !chain.isEmpty else { return window }
-        return chain[min(elementLevel, chain.count - 1)]
+        windowRects.first { $0.contains(p) }
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if mode.isBoard {
-            // No dimming, border or handles: the whole screen is the canvas.
+        if mode == .pinEdit {
+            // No dimming or handles: the pin is the canvas.
             NSGraphicsContext.saveGraphicsState()
             NSBezierPath(rect: selection).addClip()
-            renderer.drawOverlays(items: items, draft: draft, hiddenID: editingID, translation: peekingOriginal ? [] : visibleTranslation)
+            renderer.drawOverlays(items: items, draft: draft, hiddenID: editingID, translation: visibleTranslation)
             if case .loading = translationState { drawShimmer() }
             NSGraphicsContext.restoreGraphicsState()
-            if mode == .pinEdit {
-                selectionBlue.setStroke()
-                let border = NSBezierPath(rect: selection.insetBy(dx: -0.75, dy: -0.75))
-                border.lineWidth = 1.5
-                border.stroke()
-            }
+            selectionBlue.setStroke()
+            let border = NSBezierPath(rect: selection.insetBy(dx: -0.75, dy: -0.75))
+            border.lineWidth = 1.5
+            border.stroke()
             drawItemDecorations()
             return
         }
         let focus = focusRect
         let dim = NSBezierPath(rect: bounds)
         if let focus {
-            dim.append(focusPath(focus))
+            dim.append(NSBezierPath(rect: focus))
             dim.windingRule = .evenOdd
         }
         NSColor.black.withAlphaComponent(0.4).setFill()
@@ -380,9 +241,8 @@ final class CaptureView: NSView {
 
         if hasSelection {
             NSGraphicsContext.saveGraphicsState()
-            focusPath(focus).addClip()
-            renderer.drawOverlays(items: items, draft: draft, hiddenID: editingID,
-                                  translation: peekingOriginal ? [] : visibleTranslation)
+            NSBezierPath(rect: focus).addClip()
+            renderer.drawOverlays(items: items, draft: draft, hiddenID: editingID, translation: visibleTranslation)
             if ocrBoxesVisible, let recognition {
                 for line in recognition.result.lines {
                     let box = NSBezierPath(roundedRect: line.rect.insetBy(dx: -2, dy: -1), xRadius: 3, yRadius: 3)
@@ -399,7 +259,7 @@ final class CaptureView: NSView {
         }
 
         selectionBlue.setStroke()
-        let border = focusPath(focus.insetBy(dx: -0.75, dy: -0.75))
+        let border = NSBezierPath(rect: focus.insetBy(dx: -0.75, dy: -0.75))
         border.lineWidth = hasSelection || isSelecting ? 1.5 : 2.5
         border.stroke()
 
@@ -417,11 +277,6 @@ final class CaptureView: NSView {
         }
     }
 
-    private func focusPath(_ rect: CGRect) -> NSBezierPath {
-        let radius = hasSelection ? min(cornerRadius, min(rect.width, rect.height) / 2) : 0
-        return NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-    }
-
     private func drawItemDecorations() {
         if let editor = textEditor {
             dashedRect(editor.frame.insetBy(dx: -5, dy: -3))
@@ -430,7 +285,7 @@ final class CaptureView: NSView {
             dashedRect(hovered.bounds.insetBy(dx: -3, dy: -3), alpha: 0.5)
         }
         guard let item = item(selectedID), editingID != item.id else { return }
-        if item.handles.isEmpty || item.tool.usesAreaModes {
+        if item.handles.isEmpty || item.tool == .mosaic {
             dashedRect(item.bounds.insetBy(dx: -3, dy: -3))
         }
         for (_, p) in item.handles {
@@ -463,7 +318,6 @@ final class CaptureView: NSView {
     }
 
     private func effectImage(_ effect: MosaicEffect) -> NSImage {
-        if effect == .original { return baseImage }
         if let cached = effectImages[effect] { return cached }
         let input = CIImage(cgImage: snapshot)
         let output: CIImage?
@@ -479,8 +333,6 @@ final class CaptureView: NSView {
             filter.setValue(input.clampedToExtent(), forKey: kCIInputImageKey)
             filter.setValue(9 * scale, forKey: kCIInputRadiusKey)
             output = filter.outputImage
-        case .original:
-            output = input
         }
         guard let output, let cg = CIContext().createCGImage(output.cropped(to: input.extent), from: input.extent)
         else { return baseImage }
@@ -531,15 +383,6 @@ final class CaptureView: NSView {
     private func replaceItem(_ item: AnnotationItem) {
         guard let i = items.firstIndex(where: { $0.id == item.id }) else { return }
         let old = items[i].bounds
-        if case let .number(from) = items[i].shape, case let .number(to) = item.shape, from != to {
-            // A number's captions follow it.
-            let d = CGPoint(x: to.x - from.x, y: to.y - from.y)
-            for j in items.indices where items[j].captionOf == item.id {
-                let before = items[j].bounds
-                items[j] = items[j].moved(by: d)
-                invalidate(before, items[j].bounds)
-            }
-        }
         items[i] = item
         invalidate(old, item.bounds, margin: max(14, item.size))
     }
@@ -580,7 +423,7 @@ final class CaptureView: NSView {
     }
 
     private func updateHistoryButtons() {
-        toolbar.setHistory(canUndo: !undoStack.isEmpty || isTranslationShown, canRedo: !redoStack.isEmpty)
+        toolbar.setCanUndo(!undoStack.isEmpty || isTranslationShown)
     }
 
     private var isTranslationShown: Bool {
@@ -658,12 +501,6 @@ final class CaptureView: NSView {
             return
         }
 
-        if let polyPoints {
-            updatePolylineDraft(polyPoints, cursor: p)
-            NSCursor.crosshair.set()
-            return
-        }
-
         let hovered = textEditor == nil ? hitItem(at: p)?.id : nil
         if hovered != hoveredID {
             let old = item(hoveredID)?.bounds ?? .null
@@ -688,15 +525,10 @@ final class CaptureView: NSView {
         }
     }
 
-    private let magnifierHidden = Settings.shared.magnifierHidden
-    /// ⌥ held: shows the loupe even when hidden in settings.
-    private var summonMagnifier = false
-
     private func showMagnifier(at p: CGPoint, sizeText: String?) {
         magnifier.sizeText = sizeText
-        // Always sampled, so C copies the color under the pointer even with the loupe hidden.
         magnifier.update(cursor: p, in: bounds)
-        magnifier.isHidden = magnifierHidden && !summonMagnifier
+        magnifier.isHidden = false
     }
 
     var testing_magnifierVisible: Bool { !magnifier.isHidden }
@@ -712,17 +544,11 @@ final class CaptureView: NSView {
         let p = point(event)
         mouseDownPoint = p
         didDrag = false
-        if let editor = textEditor {
-            let captioning = editor.onEmptyShortcut != nil
+        if textEditor != nil {
             commitText()
-            // With the number tool, a click after a caption places the next number right away.
-            guard captioning, tool == .number else { return }
-        }
-        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
-        if polyPoints != nil {
-            addPolylinePoint(p, finish: event.clickCount >= 2, shift: event.modifierFlags.contains(.shift))
             return
         }
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
 
         guard hasSelection else {
             drag = .selecting(p)
@@ -745,7 +571,7 @@ final class CaptureView: NSView {
             drag = .resizingItem(handle, item, p)
             return
         }
-        if hit == nil, !mode.isBoard, let handle = selectionHandle(at: p) {
+        if hit == nil, mode == .screenshot, let handle = selectionHandle(at: p) {
             drag = .resizing(handle, selection, p)
             return
         }
@@ -759,7 +585,7 @@ final class CaptureView: NSView {
         select(nil)
         if let tool, selection.contains(p) {
             beginAnnotation(tool, at: p)
-        } else if selection.contains(p), !mode.isBoard {
+        } else if selection.contains(p), mode == .screenshot {
             drag = .moving(p, selection)
             NSCursor.closedHand.set()
         } else if items.isEmpty, case .none = translationState {
@@ -780,16 +606,11 @@ final class CaptureView: NSView {
             guard didDrag else { return }
             let old = selection
             var end = p
-            if let ratio = StyleMemory.aspectRatio {
-                selection = SelectionGeometry.clamp(SelectionGeometry.fit(anchor: start, toward: p, ratio: ratio.value), anchor: start, in: bounds)
-                end = CGPoint(x: selection.minX == start.x ? selection.maxX : selection.minX, y: selection.minY == start.y ? selection.maxY : selection.minY)
-            } else {
-                if shift {
-                    let side = max(abs(p.x - start.x), abs(p.y - start.y))
-                    end = clampToBounds(CGPoint(x: start.x + (p.x >= start.x ? side : -side), y: start.y + (p.y >= start.y ? side : -side)))
-                }
-                selection = CGRect(corners: start, end)
+            if shift {
+                let side = max(abs(p.x - start.x), abs(p.y - start.y))
+                end = clampToBounds(CGPoint(x: start.x + (p.x >= start.x ? side : -side), y: start.y + (p.y >= start.y ? side : -side)))
             }
+            selection = CGRect(corners: start, end)
             if hoverRect != nil {
                 hoverRect = nil
                 needsDisplay = true
@@ -807,12 +628,7 @@ final class CaptureView: NSView {
             layoutChrome()
         case let .resizing(handle, original, start):
             let old = selection
-            let delta = CGPoint(x: p.x - start.x, y: p.y - start.y)
-            if let ratio = StyleMemory.aspectRatio {
-                selection = resize(original, handle: handle, by: delta, ratio: ratio.value)
-            } else {
-                selection = handle.resize(original, by: delta).intersection(bounds)
-            }
+            selection = handle.resize(original, by: CGPoint(x: p.x - start.x, y: p.y - start.y)).intersection(bounds)
             invalidate(old, selection)
             showMagnifier(at: p, sizeText: sizeText(selection))
             layoutChrome()
@@ -853,13 +669,7 @@ final class CaptureView: NSView {
             magnifier.isHidden = true
             layoutChrome()
             needsDisplay = true
-        case let .drawing(start):
-            if !didDrag, tool == .line || tool == .arrow {
-                // A click instead of a drag starts a polyline; each further click adds a corner.
-                polyPoints = [clampToSelection(start)]
-                updatePolylineDraft(polyPoints!, cursor: start)
-                return
-            }
+        case .drawing:
             if let draft, draft.isMeaningful {
                 mutate { items.append(draft) }
                 selectedID = draft.id
@@ -875,15 +685,13 @@ final class CaptureView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        if polyPoints != nil {
-            finishPolyline()
-        } else if textEditor != nil {
+        if textEditor != nil {
             commitText()
         } else if !hasSelection {
             session?.cancel()
         } else if selectedID != nil {
             select(nil)
-        } else if mode.isBoard {
+        } else if mode == .pinEdit {
             return
         } else if tool != nil {
             setTool(nil)
@@ -894,94 +702,18 @@ final class CaptureView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
-        if !hasSelection, !elementChain.isEmpty {
-            // Wheel up walks out to the containing element, wheel down back in.
-            scrollAccumulator += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 6 : event.scrollingDeltaY
-            guard abs(scrollAccumulator) >= 1 else { return }
-            let steps = Int(scrollAccumulator.rounded(.towardZero))
-            scrollAccumulator = 0
-            elementLevel = min(max(0, elementLevel + steps), elementChain.count - 1)
-            let old = hoverRect ?? .null
-            hoverRect = elementChain[elementLevel]
-            invalidate(old, hoverRect ?? .null, margin: 4)
-            layoutChrome()
-            return
-        }
         guard hasSelection, let tool = textEditor != nil ? .text : selectedTool ?? tool else { return }
-        if tool.usesAreaModes {
-            let brush = item(selectedID).map { $0.shape.isMosaicBrush } ?? (StyleMemory.areaMode(for: tool) == .brush)
+        if tool == .mosaic {
+            let brush = item(selectedID).map { $0.shape.isMosaicBrush } ?? (StyleMemory.mosaicMode == .brush)
             guard brush else { return }
         }
         scrollAccumulator += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 6 : event.scrollingDeltaY
         guard abs(scrollAccumulator) >= 1 else { return }
         let steps = scrollAccumulator.rounded(.towardZero)
         scrollAccumulator -= steps
-        if event.modifierFlags.contains(.option) {
-            adjustOpacity(by: steps * 0.1, tool: tool)
-            return
-        }
-        let unit: CGFloat = tool.usesAreaModes || tool == .highlighter || tool == .text || tool == .number ? 2 : 1
+        let unit: CGFloat = tool == .mosaic || tool == .text || tool == .number ? 2 : 1
         let current = currentStyle?.size ?? tool.defaultSize
         applyStyle(.size(current + steps * unit), coalesce: true)
-    }
-
-    /// ⌥ + wheel: opacity of the color, like Snipaste's scroll on the color button.
-    private func adjustOpacity(by delta: CGFloat, tool: Tool) {
-        guard !tool.usesAreaModes, let color = currentStyle?.color else { return }
-        let alpha = min(1, max(0.1, ((color.alphaComponent + delta) * 10).rounded() / 10))
-        applyStyle(.color(color.withAlphaComponent(alpha)), coalesce: true)
-        showToast("不透明度 \(Int((alpha * 100).rounded()))%", duration: 0.8)
-    }
-
-    /// Resizing with a locked ratio: corners keep the opposite corner fixed, edges keep the top-left fixed.
-    private func resize(_ original: CGRect, handle: ResizeHandle, by d: CGPoint, ratio: CGFloat) -> CGRect {
-        let corners: [ResizeHandle: ResizeHandle] = [.topLeft: .bottomRight, .topRight: .bottomLeft, .bottomLeft: .topRight, .bottomRight: .topLeft]
-        if let opposite = corners[handle] {
-            let anchor = opposite.point(in: original)
-            let dragged = handle.point(in: original)
-            let p = CGPoint(x: dragged.x + d.x, y: dragged.y + d.y)
-            return SelectionGeometry.clamp(SelectionGeometry.fit(anchor: anchor, toward: p, ratio: ratio), anchor: anchor, in: bounds)
-        }
-        let r = handle.resize(original, by: d)
-        return SelectionGeometry.fitEdge(r, ratio: ratio, horizontalEdge: handle == .left || handle == .right, in: bounds)
-    }
-
-    /// A size typed into the top bar: keeps the top-left where possible, moving the selection back inside the screen.
-    private func applyTypedSize(_ size: CGSize) {
-        guard hasSelection else { return }
-        let w = min(size.width, bounds.width), h = min(size.height, bounds.height)
-        var r = CGRect(x: selection.minX, y: selection.minY, width: w, height: h)
-        r.origin.x = min(r.minX, bounds.maxX - w)
-        r.origin.y = min(r.minY, bounds.maxY - h)
-        let old = selection
-        selection = r
-        if let ratio = StyleMemory.aspectRatio, abs(w / h - ratio.value) > 0.01 {
-            // A typed size that breaks the lock turns the lock off rather than silently changing the size.
-            StyleMemory.aspectRatio = nil
-            topBar.setRatio(nil)
-        }
-        invalidate(old, selection)
-        layoutChrome()
-        needsDisplay = true
-    }
-
-    private func applyRatio(_ ratio: AspectRatio?) {
-        StyleMemory.aspectRatio = ratio
-        guard let ratio, hasSelection else {
-            if let ratio { showToast("已锁定 \(ratio.label)", duration: 1) }
-            return
-        }
-        let old = selection
-        selection = SelectionGeometry.fitEdge(selection, ratio: ratio.value, horizontalEdge: true, in: bounds)
-        invalidate(old, selection)
-        layoutChrome()
-        showToast("已锁定 \(ratio.label)", duration: 1)
-    }
-
-    func testing_typeSize(_ size: CGSize) { applyTypedSize(size) }
-    func testing_setRatio(_ ratio: AspectRatio?) {
-        topBar.setRatio(ratio)
-        applyRatio(ratio)
     }
 
     private func selectionHandle(at p: CGPoint) -> ResizeHandle? {
@@ -996,13 +728,6 @@ final class CaptureView: NSView {
     }
 
     private func commitSelection() {
-        if mode == .screenshot, let session, !session.autoOutputs.isEmpty {
-            hasSelection = true
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let session = self.session, !session.isFinished else { return }
-                session.performAutoOutputs(from: self)
-            }
-        }
         hasSelection = true
         hoverRect = nil
         magnifier.isHidden = true
@@ -1039,7 +764,6 @@ final class CaptureView: NSView {
     // MARK: - Drawing annotations
 
     private func setTool(_ newTool: Tool?) {
-        finishPolyline()
         commitText()
         tool = newTool
         select(nil)
@@ -1059,19 +783,16 @@ final class CaptureView: NSView {
             mutate { items.append(item) }
             selectedID = item.id
             invalidate(item.bounds, margin: 16)
-            beginTextEditing(captioning: item)
+            layoutChrome()
         case .pen:
             draft = AnnotationItem(shape: .pen([p]), color: color, size: size, style: style)
-            drag = .drawing(p)
-        case .highlighter:
-            draft = AnnotationItem(shape: .highlighter([p]), color: color, size: size)
             drag = .drawing(p)
         case .magnifier:
             draft = AnnotationItem(shape: .magnifier(source: p, target: p, radius: 0), color: color, size: size)
             drag = .drawing(p)
-        case .mosaic, .eraser:
-            let effect = StyleMemory.areaEffect(for: tool)
-            if StyleMemory.areaMode(for: tool) == .brush {
+        case .mosaic:
+            let effect = StyleMemory.mosaicEffect
+            if StyleMemory.mosaicMode == .brush {
                 let item = AnnotationItem(shape: .mosaicBrush([p]), color: color, size: size, effect: effect)
                 draft = item
                 invalidate(item.bounds)
@@ -1079,15 +800,11 @@ final class CaptureView: NSView {
                 draft = AnnotationItem(shape: .mosaicRect(CGRect(origin: p, size: .zero)), color: color, size: size, effect: effect)
             }
             drag = .drawing(p)
-        case .rectangle, .ellipse, .line, .arrow:
-            let shape: Shape
-            switch tool {
-            case .rectangle: shape = .rectangle(CGRect(origin: p, size: .zero))
-            case .ellipse: shape = .ellipse(CGRect(origin: p, size: .zero))
-            case .line: shape = .line(p, p)
-            default: shape = .arrow(p, p)
-            }
-            draft = AnnotationItem(shape: shape, color: color, size: size, style: style)
+        case .rectangle:
+            draft = AnnotationItem(shape: .rectangle(CGRect(origin: p, size: .zero)), color: color, size: size, style: style)
+            drag = .drawing(p)
+        case .arrow:
+            draft = AnnotationItem(shape: .arrow(p, p), color: color, size: size, style: style)
             drag = .drawing(p)
         }
     }
@@ -1102,32 +819,18 @@ final class CaptureView: NSView {
                 points.append(p)
             }
             item.shape = .pen(points)
-        case var .highlighter(points):
-            if shift, let first = points.first {
-                // Like a ruler: horizontal, vertical or 45°.
-                let angle = (atan2(p.y - first.y, p.x - first.x) / (.pi / 4)).rounded() * (.pi / 4)
-                let length = hypot(p.x - first.x, p.y - first.y)
-                points = [first, CGPoint(x: first.x + cos(angle) * length, y: first.y + sin(angle) * length)]
-            } else if let last = points.last, hypot(p.x - last.x, p.y - last.y) >= 1 {
-                points.append(p)
-            }
-            item.shape = .highlighter(points)
         case var .mosaicBrush(points):
             if let last = points.last, hypot(p.x - last.x, p.y - last.y) >= 1 { points.append(p) }
             item.shape = .mosaicBrush(points)
-        case .rectangle, .ellipse, .mosaicRect:
+        case .rectangle, .mosaicRect:
             var end = p
             if shift {
                 let side = max(abs(p.x - start.x), abs(p.y - start.y))
                 end = CGPoint(x: start.x + (p.x >= start.x ? side : -side), y: start.y + (p.y >= start.y ? side : -side))
             }
             let r = CGRect(corners: start, end)
-            switch item.shape {
-            case .rectangle: item.shape = .rectangle(r)
-            case .ellipse: item.shape = .ellipse(r)
-            default: item.shape = .mosaicRect(r)
-            }
-        case .line, .arrow:
+            if case .rectangle = item.shape { item.shape = .rectangle(r) } else { item.shape = .mosaicRect(r) }
+        case .arrow:
             var end = p
             if shift {
                 // Snap to 45° steps.
@@ -1135,70 +838,19 @@ final class CaptureView: NSView {
                 let length = hypot(p.x - start.x, p.y - start.y)
                 end = CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length)
             }
-            if case .line = item.shape { item.shape = .line(start, end) } else { item.shape = .arrow(start, end) }
+            item.shape = .arrow(start, end)
         case .magnifier:
             let radius = hypot(p.x - start.x, p.y - start.y)
             item.shape = .magnifier(source: start, target: AnnotationItem.lensCenter(source: start, radius: radius, in: selection), radius: radius)
-        case .text, .number, .polyline:
+        case .text, .number:
             break
         }
         draft = item
     }
 
-    // MARK: - Polyline
-
-    private func polylineEnd(from last: CGPoint?, to p: CGPoint, shift: Bool) -> CGPoint {
-        let p = clampToSelection(p)
-        guard shift, let last else { return p }
-        let angle = (atan2(p.y - last.y, p.x - last.x) / (.pi / 4)).rounded() * (.pi / 4)
-        let length = hypot(p.x - last.x, p.y - last.y)
-        return clampToSelection(CGPoint(x: last.x + cos(angle) * length, y: last.y + sin(angle) * length))
-    }
-
-    private func updatePolylineDraft(_ points: [CGPoint], cursor: CGPoint) {
-        let old = draft?.bounds ?? .null
-        let end = polylineEnd(from: points.last, to: cursor, shift: NSEvent.modifierFlags.contains(.shift))
-        draft = AnnotationItem(shape: .polyline(points + [end], arrow: tool == .arrow),
-                               color: StyleMemory.color(for: tool ?? .line), size: StyleMemory.size(for: tool ?? .line),
-                               style: StyleMemory.style(for: tool ?? .line))
-        invalidate(old, draft?.bounds ?? .null, margin: 4 + (draft?.size ?? 0))
-    }
-
-    private func addPolylinePoint(_ p: CGPoint, finish: Bool, shift: Bool) {
-        guard var points = polyPoints else { return }
-        if finish {
-            finishPolyline()
-            return
-        }
-        points.append(polylineEnd(from: points.last, to: p, shift: shift))
-        polyPoints = points
-        updatePolylineDraft(points, cursor: p)
-    }
-
-    /// Commits the clicked-out corners (double-click, right-click, Return or Esc).
-    private func finishPolyline() {
-        guard var points = polyPoints else { return }
-        polyPoints = nil
-        // The double-click that ends a polyline also placed a corner on its first click; drop such repeats.
-        points = points.reduce(into: []) { result, p in
-            if let last = result.last, hypot(last.x - p.x, last.y - p.y) < 2 { return }
-            result.append(p)
-        }
-        let old = draft?.bounds ?? .null
-        draft = nil
-        let item = AnnotationItem(shape: .polyline(points, arrow: tool == .arrow), color: StyleMemory.color(for: tool ?? .line),
-                                  size: StyleMemory.size(for: tool ?? .line), style: StyleMemory.style(for: tool ?? .line))
-        if item.isMeaningful {
-            mutate { items.append(item) }
-            selectedID = item.id
-        }
-        invalidate(old, item.bounds, margin: 16)
-        layoutChrome()
-    }
-
     private func deleteSelectedItem() {
         guard let id = selectedID else { return }
-        mutate { items.removeAll { $0.id == id || $0.captionOf == id } }
+        mutate { items.removeAll { $0.id == id } }
         selectedID = nil
         hoveredID = nil
         // Numbers after the deleted one shift down, so redraw everything.
@@ -1208,20 +860,12 @@ final class CaptureView: NSView {
 
     // MARK: - Text
 
-    /// `captioning` opens an empty editor beside a just-placed number, so its explanation can be typed right away.
-    private func beginTextEditing(at p: CGPoint? = nil, existing: AnnotationItem? = nil, captioning number: AnnotationItem? = nil) {
+    private func beginTextEditing(at p: CGPoint? = nil, existing: AnnotationItem? = nil) {
         commitText()
         beginChange()
         var origin = p ?? .zero
         var text = ""
-        if let number, case let .number(c) = number.shape {
-            editingColor = number.color
-            editingSize = StyleMemory.size(for: .text)
-            editingStyle = StyleMemory.style(for: .text)
-            editingCaptionOf = number.id
-            let lineHeight = AnnotationItem.textSize("1", size: editingSize, width: 1000).height
-            origin = CGPoint(x: c.x + number.size / 2 + max(4, number.size * 0.25), y: c.y - lineHeight / 2)
-        } else if let existing, case let .text(t, o, _) = existing.shape {
+        if let existing, case let .text(t, o, _) = existing.shape {
             origin = o
             text = t
             editingColor = existing.color
@@ -1240,12 +884,6 @@ final class CaptureView: NSView {
         editor.string = text
         editor.apply(color: editingColor, size: editingSize)
         editor.onCommit = { [unowned self] in self.commitText() }
-        if number != nil {
-            editor.onEmptyShortcut = { [unowned self] event in
-                self.commitText()
-                self.keyDown(with: event)
-            }
-        }
         editor.onResize = { [unowned self] in self.needsDisplay = true }
         addSubview(editor, positioned: .below, relativeTo: topBar)
         textEditor = editor
@@ -1271,13 +909,11 @@ final class CaptureView: NSView {
                 selectedID = id
             }
         } else if !text.isEmpty {
-            var item = AnnotationItem(shape: shape, color: editingColor, size: editingSize, style: editingStyle)
-            item.captionOf = editingCaptionOf
+            let item = AnnotationItem(shape: shape, color: editingColor, size: editingSize, style: editingStyle)
             items.append(item)
             selectedID = item.id
         }
         editingID = nil
-        editingCaptionOf = nil
         editor.removeFromSuperview()
         endChange()
         window?.makeFirstResponder(self)
@@ -1300,7 +936,7 @@ final class CaptureView: NSView {
         }
         guard let tool else { return nil }
         return StyleState(tool: tool, color: StyleMemory.color(for: tool), size: StyleMemory.size(for: tool),
-                          mosaicMode: StyleMemory.areaMode(for: tool), mosaicEffect: StyleMemory.areaEffect(for: tool),
+                          mosaicMode: StyleMemory.mosaicMode, mosaicEffect: StyleMemory.mosaicEffect,
                           options: StyleMemory.style(for: tool))
     }
 
@@ -1321,11 +957,6 @@ final class CaptureView: NSView {
             return
         }
         guard let styleTool = textEditor != nil ? .text : selectedTool ?? tool else { return }
-        var action = action
-        if case let .color(c) = action, !coalesce, let current = currentStyle?.color, c.alphaComponent == 1 {
-            // Picking a swatch keeps the opacity set with ⌥ + wheel.
-            action = .color(c.withAlphaComponent(current.alphaComponent))
-        }
         var clampedSize: CGFloat?
         if case let .size(value) = action {
             let range = styleTool.sizeRange
@@ -1336,8 +967,7 @@ final class CaptureView: NSView {
         switch action {
         case .size: StyleMemory.sizes[styleTool] = clampedSize
         case let .color(c): StyleMemory.setColor(c, for: styleTool)
-        case let .mosaicMode(m):
-            if styleTool == .eraser { StyleMemory.eraserMode = m } else { StyleMemory.mosaicMode = m }
+        case let .mosaicMode(m): StyleMemory.mosaicMode = m
         case let .mosaicEffect(e): StyleMemory.mosaicEffect = e
         case .options: break
         case .customColor: break
@@ -1396,38 +1026,7 @@ final class CaptureView: NSView {
             return
         }
 
-        if code == 96 || (flags == .command && key == "r") {
-            finishPolyline()
-            commitText()
-            session?.refresh(from: self)
-            return
-        }
-        if mode.isBoard, flags.isEmpty, key == " " {
-            toolbarHiddenByUser.toggle()
-            layoutChrome()
-            return
-        }
-        if flags.isEmpty, key == "`" {
-            toggleCursor()
-            return
-        }
-        if flags.isEmpty, key == "," || key == "." {
-            finishPolyline()
-            commitText()
-            session?.stepHistory(key == "," ? 1 : -1, from: self)
-            return
-        }
-
         guard hasSelection else {
-            if code == 48, flags.isEmpty {
-                // Tab: elements or whole windows.
-                detectElements.toggle()
-                elementChain = []
-                elementLevel = 0
-                primeCursor()
-                showToast(detectElements ? (hierarchy == nil ? "识别界面元素（需要辅助功能权限）" : "识别界面元素 · 滚轮切换父/子元素") : "只识别窗口", duration: 1.5)
-                return
-            }
             if let d = arrows[code] {
                 let step: CGFloat = flags.contains(.shift) ? 10 : 1
                 warpCursor(by: CGPoint(x: d.x * step, y: d.y * step))
@@ -1443,7 +1042,7 @@ final class CaptureView: NSView {
         }
 
         if code == 36 || code == 76 {
-            if polyPoints != nil { finishPolyline() } else { finish(.apply) }
+            finish(.apply)
             return
         }
         if code == 51 || code == 117 {
@@ -1460,7 +1059,6 @@ final class CaptureView: NSView {
             case "c": finish(.copy)
             case "s": finish(.save)
             case "t": handle(.pin)
-            case "p": printSelection()
             default: super.keyDown(with: event)
             }
             return
@@ -1474,9 +1072,7 @@ final class CaptureView: NSView {
             return
         }
         guard flags.isEmpty else { return }
-        if let t = Tool.allCases.first(where: { $0.key == key }) {
-            handle(.tool(t))
-        } else if let action = ToolbarAction.singleKeyActions.first(where: { $0.shortcut.lowercased() == key }) {
+        if let action = ToolbarAction.action(forKey: key) {
             handle(action)
         }
     }
@@ -1487,19 +1083,7 @@ final class CaptureView: NSView {
 
     /// Esc steps back one level at a time; it only closes the capture when there is nothing left to back out of.
     private func handleEscape() {
-        if mode.isBoard, mode != .pinEdit, polyPoints == nil, textEditor == nil, selectedID == nil {
-            if escapeArmed {
-                session?.cancel()
-            } else {
-                escapeArmed = true
-                showToast("再按一次 Esc 退出白板", duration: 1.5)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.escapeArmed = false }
-            }
-            return
-        }
-        if polyPoints != nil {
-            finishPolyline()
-        } else if textEditor != nil {
+        if textEditor != nil {
             commitText()
         } else if !ocrPanel.isHidden {
             closeOCRPanel()
@@ -1513,31 +1097,12 @@ final class CaptureView: NSView {
     }
 
     override func flagsChanged(with event: NSEvent) {
-        let option = event.modifierFlags.contains(.option)
-        if magnifierHidden, option != summonMagnifier, !hasSelection {
-            summonMagnifier = option
-            primeCursor()
-        }
         let shift = event.modifierFlags.contains(.shift)
         if shift, !shiftDown, !magnifier.isHidden, case .none = drag {
             StyleMemory.hexColor.toggle()
             magnifier.showHex = StyleMemory.hexColor
-        ocrPanel.onFormat = { [unowned self] in self.reformatOCR($0) }
-        topBar.onSize = { [unowned self] in self.applyTypedSize($0) }
-        topBar.onRatio = { [unowned self] in self.applyRatio($0) }
-        topBar.onEndEditing = { [unowned self] in self.window?.makeFirstResponder(self) }
-        topBar.onBackdrop = { [unowned self] index in
-            StyleMemory.backdrop = index
-            self.showToast(index.map { "导出时加「\(Backdrop.presets[$0].title)」背景和边距" } ?? "导出时不加背景", duration: 1.5)
-        }
         }
         shiftDown = shift
-
-        let shouldPeek = event.modifierFlags.contains(.option) && isTranslationShown
-        if shouldPeek != peekingOriginal {
-            peekingOriginal = shouldPeek
-            invalidate(selection)
-        }
     }
 
     /// Arrow keys: nudge the selected annotation, or move / expand (⌘) / shrink (⇧) the selection by 1pt.
@@ -1603,7 +1168,6 @@ final class CaptureView: NSView {
         let sizeRect: CGRect? = hasSelection || isSelecting ? (selection.width > 0 ? selection : nil) : hoverRect
         topBar.isHidden = sizeRect == nil
         if let sizeRect {
-            topBar.setControlsVisible(hasSelection)
             topBar.setSize(sizeRect.size)
             var top = CGPoint(x: sizeRect.minX, y: sizeRect.minY - topBar.frame.height - 6)
             if top.y < 4 { top.y = sizeRect.minY + 6 }
@@ -1611,8 +1175,8 @@ final class CaptureView: NSView {
             topBar.setFrameOrigin(top)
         }
 
-        if mode.isBoard { topBar.isHidden = true }
-        toolbar.isHidden = !hasSelection || isAdjustingSelection || toolbarHiddenByUser
+        if mode == .pinEdit { topBar.isHidden = true }
+        toolbar.isHidden = !hasSelection || isAdjustingSelection
         if !hasSelection { ocrPanel.isHidden = true }
         let style = currentStyle
         styleBar.isHidden = toolbar.isHidden || style == nil
@@ -1719,14 +1283,10 @@ final class CaptureView: NSView {
             setTool(tool == t ? nil : t)
         case .undo:
             undo(nil)
-        case .redo:
-            redo(nil)
         case .ocr:
             runOCR()
         case .translate:
             runTranslation()
-        case .redact:
-            runRedaction()
         case .pin:
             if mode == .pinEdit { finish(.apply) } else { pinSelection() }
         case .longCapture:
@@ -1735,8 +1295,6 @@ final class CaptureView: NSView {
             session?.cancel()
         case .save:
             finish(NSEvent.modifierFlags.contains(.shift) ? .saveAs : .save)
-        case .share:
-            shareSelection()
         case .done:
             finish(.apply)
         }
@@ -1769,6 +1327,7 @@ final class CaptureView: NSView {
         window?.makeFirstResponder(self)
     }
 
+    /// Recognizes the selection's text and shows it in an editable panel beside the selection; its button copies it.
     private func runOCR() {
         guard recognitionTask == nil else { return }
         showToast("正在识别文字…", duration: nil)
@@ -1781,12 +1340,7 @@ final class CaptureView: NSView {
                     showToast("没有识别到文字")
                     return
                 }
-                // Something laid out in rows and columns starts out as a Markdown table.
-                let table = StructuredText.table(result.lines).map(StructuredText.markdown)
-                let shown = table ?? text
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(shown, forType: .string)
-                ocrPanel.show(text: shown, lineCount: result.lines.count + result.codes.count, format: table == nil ? 0 : 1)
+                ocrPanel.show(text: text, lineCount: result.lines.count)
                 ocrPanel.isHidden = false
                 ocrBoxesVisible = true
                 invalidate(selection)
@@ -1798,60 +1352,7 @@ final class CaptureView: NSView {
         }
     }
 
-    /// Covers personal data and secrets found by OCR with mosaic boxes, as one undoable step.
-    private func runRedaction() {
-        guard recognitionTask == nil else { return }
-        showToast("正在查找敏感信息…", duration: nil)
-        recognitionTask = Task { @MainActor in
-            defer { recognitionTask = nil }
-            do {
-                let result = try await recognize()
-                // Skip what is already covered, so pressing B twice doesn't stack boxes.
-                let covered = items.compactMap { item -> CGRect? in
-                    if case let .mosaicRect(r) = item.shape { return r }
-                    return nil
-                }
-                let regions = result.sensitive.filter { region in !covered.contains { $0.contains(region.rect.insetBy(dx: 2, dy: 1)) } }
-                guard !regions.isEmpty else {
-                    showToast(result.sensitive.isEmpty ? "没有找到手机号、邮箱、证件号、卡号或密钥" : "敏感信息都已经打码了")
-                    return
-                }
-                mutate {
-                    for region in regions {
-                        let box = region.rect.insetBy(dx: -3, dy: -2).intersection(selection)
-                        items.append(AnnotationItem(shape: .mosaicRect(box), color: .black, size: 12, effect: .pixelate))
-                    }
-                }
-                let counts = Dictionary(grouping: regions, by: \.kind).map { "\($0.key.rawValue) \($0.value.count)" }.sorted()
-                showToast("已打码 \(regions.count) 处：\(counts.joined(separator: "、")) · ⌘Z 撤销", duration: 3)
-                needsDisplay = true
-            } catch {
-                showToast("识别失败：\(error.localizedDescription)")
-            }
-        }
-    }
-
-    /// The OCR panel's 文本 / 表格 / 代码 switch.
-    private func reformatOCR(_ format: Int) {
-        guard let result = recognition?.result else { return }
-        switch format {
-        case 1:
-            guard let grid = StructuredText.table(result.lines) else {
-                showToast("没有识别出行列整齐的表格")
-                ocrPanel.formatControl.selectedSegment = 0
-                ocrPanel.replace(text: result.plainText)
-                return
-            }
-            ocrPanel.replace(text: StructuredText.markdown(grid))
-        case 2:
-            ocrPanel.replace(text: StructuredText.indented(result.lines))
-        default:
-            ocrPanel.replace(text: result.plainText)
-        }
-    }
-
     var testing_ocrText: String? { ocrPanel.isHidden ? nil : ocrPanel.textView.string }
-    func testing_reformat(_ format: Int) { reformatOCR(format) }
 
     private func runTranslation() {
         switch translationState {
@@ -1917,7 +1418,7 @@ final class CaptureView: NSView {
                 let laidOut = TranslationLayout.layout(blocks: blocks, translations: translations, crop: crop, selection: rect)
                 translationState = .shown(laidOut, rect)
                 let missing = blocks.count - laidOut.count
-                showToast(missing > 0 ? "已翻译 \(laidOut.count) 段，\(missing) 段没有返回译文" : "已翻译 \(laidOut.count) 段 · Y 切换原文 · 按住 ⌥ 临时查看原文",
+                showToast(missing > 0 ? "已翻译 \(laidOut.count) 段，\(missing) 段没有返回译文" : "已翻译 \(laidOut.count) 段 · Y 切换原文",
                           duration: missing > 0 ? 3 : 2)
                 updateHistoryButtons()
                 invalidate(selection)
@@ -1956,19 +1457,8 @@ final class CaptureView: NSView {
     // MARK: - Output
 
     /// The image that copy/save would produce right now.
-    /// `base` replaces the frozen screen, for a transparent board exported over what is on screen now.
-    func exportImage(format: ImageFormat, shadow: Bool? = nil, base: CGImage? = nil) -> NSBitmapImageRep? {
-        // Boards are full-screen pictures: no rounded corners or drop shadow.
-        // Pins (shadow false) and boards stay plain; copies and saves get the backdrop if one is chosen.
-        let backdrop = mode.isBoard || shadow == false ? nil : StyleMemory.backdrop.flatMap { Backdrop.presets.indices.contains($0) ? Backdrop.presets[$0] : nil }
-        let options = ExportOptions(cornerRadius: mode.isBoard ? 0 : cornerRadius, shadow: mode.isBoard ? false : shadow ?? shadowEnabled,
-                                    format: format, backdrop: backdrop)
-        var renderer = self.renderer
-        if let base {
-            renderer = ContentRenderer(base: NSImage(cgImage: base, size: bounds.size), bounds: bounds, effect: { _ in NSImage(cgImage: base, size: self.bounds.size) })
-        }
-        return Exporter.render(renderer: renderer, selection: selection, scale: scale,
-                               items: items, translation: visibleTranslation, options: options)
+    func exportImage() -> NSBitmapImageRep? {
+        Exporter.render(renderer: renderer, selection: selection, scale: scale, items: items, translation: visibleTranslation)
     }
 
     /// The selection in global screen coordinates.
@@ -1982,35 +1472,10 @@ final class CaptureView: NSView {
     private func pinSelection() {
         commitText()
         endChange()
-        guard hasSelection, let frame = selectionOnScreen, let rep = exportImage(format: .png, shadow: false) else { return }
+        guard hasSelection, let frame = selectionOnScreen, let rep = exportImage() else { return }
         StyleMemory.lastSelection[displayID] = selection
-        let saved = autoSaveIfEnabled()
-        session?.record(self)
         session?.finish()
-        Sound.playCapture()
         PinManager.shared.pin(rep, frame: frame)
-        if let saved { HUD.show("已贴图，并自动保存到 \(saved)", on: window?.screen) }
-    }
-
-    /// Closes the overlay (the print panel would open underneath it) and prints the selection.
-    private func printSelection() {
-        commitText()
-        endChange()
-        guard hasSelection, let rep = exportImage(format: .png, shadow: false) else { return }
-        session?.record(self)
-        session?.finish()
-        DispatchQueue.main.async { Printer.print(rep) }
-    }
-
-    /// Closes the overlay (it sits above menus) and opens the share menu where the selection was.
-    private func shareSelection() {
-        commitText()
-        endChange()
-        guard hasSelection, let rect = selectionOnScreen, let rep = exportImage(format: .png) else { return }
-        StyleMemory.lastSelection[displayID] = selection
-        session?.record(self)
-        session?.finish()
-        ShareController.share(rep, at: rect)
     }
 
     /// Hands the selected region to the long-screenshot controller. Annotations are not carried over.
@@ -2027,7 +1492,7 @@ final class CaptureView: NSView {
 
     /// Bakes the annotations into the pin; ⌘C and ⌘S also copy or save the result.
     private func finishPinEdit(_ output: OutputAction) {
-        guard let rep = exportImage(format: .png) else {
+        guard let rep = exportImage() else {
             showToast("导出图片失败")
             return
         }
@@ -2036,49 +1501,26 @@ final class CaptureView: NSView {
             Exporter.copy(rep)
         case .save, .saveAs:
             let settings = Settings.shared
-            if let saved = exportImage(format: settings.imageFormat) {
-                _ = try? Exporter.save(saved, format: settings.imageFormat, directory: settings.saveDirectory)
-            }
+            _ = try? Exporter.save(rep, format: settings.imageFormat, directory: settings.saveDirectory)
         case .apply:
             break
         }
         session?.applyPinEdit(rep)
     }
 
-    /// With auto-save on, copying or pinning also writes the file. Returns the short path, or nil when off or failed.
-    private func autoSaveIfEnabled(base: CGImage? = nil) -> String? {
-        let settings = Settings.shared
-        guard settings.autoSave, let rep = exportImage(format: settings.imageFormat, base: base),
-              let url = try? Exporter.save(rep, format: settings.imageFormat, directory: settings.saveDirectory)
-        else { return nil }
-        return url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
-    }
-
-    private func finish(_ output: OutputAction, base: CGImage? = nil) {
+    private func finish(_ output: OutputAction) {
         commitText()
         endChange()
         guard hasSelection, selection.width >= 1, selection.height >= 1 else { return }
-        if mode == .transparentBoard, base == nil {
-            // The drawing goes onto what is on screen right now; Snap's own windows are left out of that capture.
-            guard let session else { return }
-            Task { @MainActor in
-                if let live = try? await session.liveCapture()[displayID] {
-                    finish(output, base: live)
-                } else {
-                    showToast("截取屏幕失败")
-                }
-            }
-            return
-        }
-        if !mode.isBoard { StyleMemory.lastSelection[displayID] = selection }
         if mode == .pinEdit {
             finishPinEdit(output)
             return
         }
+        StyleMemory.lastSelection[displayID] = selection
         let output: OutputAction = output == .apply ? .copy : output
         let settings = Settings.shared
         let format: ImageFormat = output == .copy ? .png : settings.imageFormat
-        guard let rep = exportImage(format: format, base: base) else {
+        guard let rep = exportImage() else {
             showToast("导出图片失败")
             return
         }
@@ -2086,17 +1528,12 @@ final class CaptureView: NSView {
         switch output {
         case .copy:
             Exporter.copy(rep)
-            let saved = autoSaveIfEnabled(base: base)
-            session?.record(self)
             session?.finish()
-            Sound.playCapture()
-            HUD.show(saved.map { "已复制，并自动保存到 \($0)" } ?? "已复制到剪贴板", on: screen)
+            HUD.show("已复制到剪贴板", on: screen)
         case .save:
             do {
                 let url = try Exporter.save(rep, format: format, directory: settings.saveDirectory)
-                session?.record(self)
                 session?.finish()
-                Sound.playCapture()
                 HUD.show("已保存到 \(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))", on: screen)
             } catch {
                 showToast("保存失败：\(error.localizedDescription)", duration: 5)

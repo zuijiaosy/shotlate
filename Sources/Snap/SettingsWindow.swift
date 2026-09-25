@@ -1,10 +1,9 @@
 import AppKit
-import ApplicationServices
 import ServiceManagement
 import SnapCore
 import SwiftUI
 
-enum ShortcutTarget: Equatable { case capture, pinClipboard, togglePins, scanCode, custom(UUID) }
+enum ShortcutTarget: Equatable { case capture, pinClipboard, togglePins, scanCode }
 
 final class SettingsModel: ObservableObject {
     @Published var baseURL = Settings.shared.baseURL
@@ -17,30 +16,7 @@ final class SettingsModel: ObservableObject {
     @Published var pinShortcut = Settings.shared.pinClipboardShortcut
     @Published var togglePinsShortcut = Settings.shared.togglePinsShortcut
     @Published var scanCodeShortcut = Settings.shared.scanCodeShortcut
-    @Published var customCommands = Settings.shared.customCommands
-    @Published var ignoredAppsText = Settings.shared.ignoredApps.joined(separator: ", ")
     @Published var recording: ShortcutTarget?
-    @Published var playSound = Settings.shared.playSound
-    @Published var copyAsFile = Settings.shared.copyAsFile
-    @Published var captureCursor = Settings.shared.captureCursor
-    @Published var detectElements = Settings.shared.detectElements
-    @Published var superSnip = Settings.shared.superSnip
-    @Published var hotCorners = Settings.shared.hotCorners
-    @Published var magnifierZoom = Settings.shared.magnifierZoom
-    @Published var magnifierGrid = Settings.shared.magnifierGrid
-    @Published var magnifierHidden = Settings.shared.magnifierHidden
-    @Published var superSnipError: String?
-    @Published var accessibilityTrusted = ElementCollector.isTrusted
-    @Published var autoSave = Settings.shared.autoSave
-    @Published var restorePins = Settings.shared.restorePins
-    @Published var historyLimit = Settings.shared.historyLimit
-    @Published var keepCancelledHistory = Settings.shared.keepCancelledHistory
-    @Published var historyCleared = false
-    @Published var fileNameTemplate = Settings.shared.fileNameTemplate
-
-    var fileNamePreview: String {
-        FileNameTemplate.expand(fileNameTemplate, date: Date(), appName: "Safari") + "." + imageFormat.fileExtension
-    }
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var loginItemError: String?
     @Published var testResult: String?
@@ -70,32 +46,6 @@ final class SettingsModel: ObservableObject {
         s.pinClipboardShortcut = pinShortcut
         s.togglePinsShortcut = togglePinsShortcut
         s.scanCodeShortcut = scanCodeShortcut
-        s.customCommands = customCommands.filter { !$0.command.trimmingCharacters(in: .whitespaces).isEmpty }
-        s.ignoredApps = ignoredAppsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        s.playSound = playSound
-        s.copyAsFile = copyAsFile
-        s.captureCursor = captureCursor
-        s.detectElements = detectElements
-        s.superSnip = superSnip
-        s.hotCorners = hotCorners
-        HotCornerMonitor.shared.reload()
-        s.magnifierZoom = magnifierZoom
-        s.magnifierGrid = magnifierGrid
-        s.magnifierHidden = magnifierHidden
-        if !SuperSnip.shared.setEnabled(superSnip) {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-            superSnipError = "超级截图需要辅助功能权限，授权后重新保存设置"
-        } else {
-            superSnipError = nil
-        }
-        s.autoSave = autoSave
-        s.restorePins = restorePins
-        s.historyLimit = historyLimit
-        s.keepCancelledHistory = keepCancelledHistory
-        CaptureHistory.shared.prune()
-        let template = fileNameTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
-        s.fileNameTemplate = template.isEmpty ? FileNameTemplate.default : template
         applyLaunchAtLogin()
         NotificationCenter.default.post(name: Settings.didChange, object: nil)
         savedMessage = "已保存"
@@ -166,8 +116,6 @@ final class SettingsModel: ObservableObject {
                 case .pinClipboard: self.pinShortcut = shortcut
                 case .togglePins: self.togglePinsShortcut = shortcut
                 case .scanCode: self.scanCodeShortcut = shortcut
-                case let .custom(id):
-                    if let i = self.customCommands.firstIndex(where: { $0.id == id }) { self.customCommands[i].shortcut = shortcut }
                 case nil: break
                 }
                 self.stopRecordingShortcut()
@@ -231,122 +179,10 @@ struct SettingsView: View {
                     Text("JPG").tag(ImageFormat.jpeg)
                 }
                 .pickerStyle(.segmented)
-                LabeledContent("文件名") {
-                    VStack(alignment: .trailing, spacing: 2) {
-                        TextField("", text: $model.fileNameTemplate, prompt: Text(FileNameTemplate.default))
-                            .multilineTextAlignment(.trailing)
-                        Text("例：\(model.fileNamePreview)").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                .help("{app} 是截图时位于前台的应用，大括号里的其他内容是日期格式，例如 {yyyyMMdd_HHmmss}")
-                Toggle("复制或贴图时也自动保存", isOn: $model.autoSave)
-                Toggle("默认截取鼠标指针（截图时按 ` 切换）", isOn: $model.captureCursor)
-                Picker("放大镜", selection: $model.magnifierZoom) {
-                    Text("4 倍").tag(4)
-                    Text("8 倍").tag(8)
-                    Text("12 倍").tag(12)
-                }
-                .pickerStyle(.segmented)
-                .disabled(model.magnifierHidden)
-                Toggle("放大镜显示像素网格", isOn: $model.magnifierGrid)
-                    .disabled(model.magnifierHidden)
-                Toggle("隐藏放大镜（按住 ⌥ 临时显示）", isOn: $model.magnifierHidden)
-                Toggle("超级截图：按住 \(SuperSnip.label) 直接框选截图", isOn: $model.superSnip)
-                if let error = model.superSnipError {
-                    Text(error).font(.callout).foregroundStyle(.red)
-                }
-                Toggle("识别界面元素（按钮、输入框、面板），滚轮切换父/子元素", isOn: $model.detectElements)
-                if model.detectElements, !model.accessibilityTrusted {
-                    HStack {
-                        Text("需要辅助功能权限，否则只能识别整个窗口").font(.callout).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("授予权限…") {
-                            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-                            model.accessibilityTrusted = AXIsProcessTrustedWithOptions(options)
-                        }
-                    }
-                }
-                Toggle("完成截图时播放音效", isOn: $model.playSound)
-                Toggle("复制图片时同时复制为文件", isOn: $model.copyAsFile)
-                    .help("开启后可以在访达里直接 ⌘V 粘贴成 PNG 文件。有的聊天软件会因此把图片当成文件发送。")
-            }
-
-            Section {
-                ForEach($model.customCommands) { $command in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            TextField("名称", text: $command.name).frame(width: 130)
-                            Button(model.recording == .custom(command.id) ? "请按组合键…" : command.shortcut?.displayString ?? "设置快捷键") {
-                                model.recording == .custom(command.id) ? model.stopRecordingShortcut() : model.startRecording(.custom(command.id))
-                            }
-                            Spacer()
-                            Button(role: .destructive) {
-                                model.customCommands.removeAll { $0.id == command.id }
-                            } label: { Image(systemName: "minus.circle") }
-                            .buttonStyle(.borderless)
-                        }
-                        TextField("命令", text: $command.command, prompt: Text("snip --full -o clipboard 或 snap://…"))
-                            .font(.system(.body, design: .monospaced))
-                        if Automation.parse(command: command.command) == nil {
-                            Text("无法识别的命令").font(.caption).foregroundStyle(.red)
-                        }
-                    }
-                }
-                Menu("添加命令") {
-                    ForEach(CustomCommand.presets, id: \.command) { preset in
-                        Button(preset.name) { model.customCommands.append(CustomCommand(name: preset.name, command: preset.command)) }
-                    }
-                    Divider()
-                    Button("自定义…") { model.customCommands.append(CustomCommand(name: "新命令", command: "")) }
-                }
-                TextField("忽略这些应用", text: $model.ignoredAppsText, prompt: Text("例如：Steam, com.microsoft.rdc.macos"))
-            } header: {
-                Text("快捷键命令")
-            } footer: {
-                Text("命令可以是 snap:// 链接，或 Snipaste 风格的命令行（snip、paste、toggle-images、whiteboard、barcode-scan、switch-group），见 README「自动化」。「忽略这些应用」填应用名、Bundle ID 或路径片段，用逗号分隔；这些应用在前台时 Snap 的所有快捷键暂时失效，按键直接交给它们。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                ForEach([(ScreenCorner.topLeft, "左上角"), (.topRight, "右上角"), (.bottomLeft, "左下角"), (.bottomRight, "右下角")], id: \.0) { corner, title in
-                    Picker(title, selection: Binding(get: { model.hotCorners[corner] ?? "" }, set: { model.hotCorners[corner] = $0 })) {
-                        ForEach(HotCornerMonitor.choices, id: \.command) { Text($0.title).tag($0.command) }
-                    }
-                }
-            } header: {
-                Text("屏幕触发角")
-            } footer: {
-                Text("鼠标在屏幕角落停留片刻即执行。如果系统设置里的「触发角」也用了同一个角，两者会同时生效。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Stepper(value: $model.historyLimit, in: 0...200, step: 5) {
-                    Text(model.historyLimit == 0 ? "截图历史：关闭" : "截图历史：保留最近 \(model.historyLimit) 张")
-                }
-                Toggle("按 Esc 取消的截图也保留", isOn: $model.keepCancelledHistory)
-                    .disabled(model.historyLimit == 0)
-                HStack {
-                    Spacer()
-                    Button(model.historyCleared ? "已清空" : "清空截图历史") {
-                        CaptureHistory.shared.clear()
-                        model.historyCleared = true
-                    }
-                    .disabled(model.historyCleared)
-                }
-            } header: {
-                Text("截图历史")
-            } footer: {
-                Text("截图时按 , 和 . 回看之前的截图，选区和标注都还在，可以继续编辑、复制或贴图。历史保存在本机的 ~/Library/Application Support/Snap/History。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Section("通用") {
                 Toggle("登录时启动 Snap", isOn: $model.launchAtLogin)
-                Toggle("退出时保留贴图，下次启动时恢复", isOn: $model.restorePins)
                 if let error = model.loginItemError {
                     Text(error).font(.callout).foregroundStyle(.red)
                 }
