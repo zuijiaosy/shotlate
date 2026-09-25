@@ -24,6 +24,7 @@ enum FeatureChecks {
         ("countdown", countdown),
         ("tool-colors", toolColors),
         ("item-styles", itemStyles),
+        ("number-caption", numberCaption),
         ("scan-code", scanCode),
         ("pin-annotate", pinAnnotate),
         ("hotkeys", hotkeys),
@@ -168,14 +169,25 @@ enum FeatureChecks {
         let card = bar.hoverCard
         expect(card.isHidden, "no hover card until the pointer is on a button")
         bar.toolButtons[.mosaic]?.onHover?(true)
+        try? await Task.sleep(for: .milliseconds(300))
+        expect(card.isHidden, "no card while the pointer is only passing over")
+        try? await Task.sleep(for: .milliseconds(300))
         let mosaic = bar.toolButtons[.mosaic]!.convert(bar.toolButtons[.mosaic]!.bounds, to: h.view)
         expect(!card.isHidden && card.frame.maxY <= bar.frame.minY && abs(card.frame.midX - mosaic.midX) < 1,
                "hovering a button shows its card above it (\(card.frame))")
         h.screenshot().map { write($0, "toolbar-hover.png") }
         bar.toolButtons[.mosaic]?.onHover?(false)
         expect(!card.isHidden, "leaving the button leaves time to reach the card")
+        bar.toolButtons[.arrow]?.onHover?(true)
+        let arrow = bar.toolButtons[.arrow]!.convert(bar.toolButtons[.arrow]!.bounds, to: h.view)
+        expect(!card.isHidden && abs(card.frame.midX - arrow.midX) < 1, "with a card up, the next button's card shows at once")
+        bar.toolButtons[.arrow]?.onHover?(false)
         try? await Task.sleep(for: .milliseconds(600))
         expect(card.isHidden, "and then hides it")
+        bar.toolButtons[.rectangle]?.onHover?(true)
+        bar.toolButtons[.rectangle]?.onHover?(false)
+        try? await Task.sleep(for: .milliseconds(600))
+        expect(card.isHidden, "a pointer that leaves before the delay never shows a card")
 
         h = CaptureHarness(size: size)
         let low = CGRect(x: 100, y: 300, width: 700, height: 540)
@@ -188,6 +200,7 @@ enum FeatureChecks {
         expect(!style.isHidden && style.frame.maxX <= bar.frame.minX && abs(style.frame.midY - icon) < 2,
                "the style bar sits left of the column, level with its tool (\(style.frame))")
         bar.toolButtons[.arrow]?.onHover?(true)
+        try? await Task.sleep(for: .milliseconds(600))
         expect(!bar.hoverCard.isHidden && bar.hoverCard.frame.minX >= bar.frame.maxX, "in a column the card goes beside it (\(bar.hoverCard.frame))")
         h.screenshot().map { write($0, "toolbar-right.png") }
 
@@ -229,6 +242,7 @@ enum FeatureChecks {
         let rect = bar.toolButtons[.rectangle]!
 
         rect.onHover?(true)
+        try? await Task.sleep(for: .milliseconds(600))
         rect.onHover?(false)
         card.onHover?(true) // the pointer arrives on the card within the grace time
         try? await Task.sleep(for: .milliseconds(600))
@@ -324,6 +338,31 @@ enum FeatureChecks {
                "choices are saved for the next launch")
 
         h.export().map { write($0, "tool-colors.png") }
+    }
+
+    @MainActor static func numberCaption() async {
+        let h = CaptureHarness()
+        h.select(CGRect(x: 20, y: 20, width: 760, height: 460))
+        func type(_ text: String) {
+            (h.window.firstResponder as? NSTextView)?.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        func texts() -> [String] { h.view.testing_items.compactMap { if case let .text(t, _, _) = $0.shape { t } else { nil } } }
+        func numbers() -> [CGPoint] { h.view.testing_items.compactMap { if case let .number(c) = $0.shape { c } else { nil } } }
+
+        h.key("7", code: 26)
+        h.click(CGPoint(x: 100, y: 100))
+        expect(numbers().count == 1 && h.window.firstResponder is NSTextView, "placing a number starts typing its caption")
+        type("第一步")
+        h.click(CGPoint(x: 100, y: 200))
+        expect(texts() == ["第一步"] && numbers().count == 2, "the next click keeps the caption and places number 2")
+        if let caption = h.view.testing_items.first(where: { if case .text = $0.shape { true } else { false } }) {
+            expect(caption.bounds.minX > 100 && abs(caption.bounds.midY - 100) < 16, "the caption sits right of its number (\(caption.bounds))")
+        }
+        h.screenshot().map { write($0, "number-caption.png") }
+        h.key("\u{1b}", code: 53)
+        expect(texts() == ["第一步"] && h.window.firstResponder === h.view, "Esc with nothing typed leaves just the number")
+        h.key("", code: 51)
+        expect(numbers().count == 1, "which is selected, so Delete removes it")
     }
 
     @MainActor static func itemStyles() async {

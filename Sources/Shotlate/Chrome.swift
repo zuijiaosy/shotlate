@@ -275,7 +275,8 @@ enum ToolbarKeys {
     static func reset() { stored = [:] }
 }
 
-/// Bottom toolbar: plain icons in one row, like iShot's. A button's name and shortcut appear in a card on hover.
+/// Bottom toolbar: plain icons in one row, like iShot's. A button's name and shortcut appear in a card
+/// once the pointer rests on it for `cardDelay`.
 /// Turns vertical when there is no room under the selection, to sit beside it instead.
 final class ToolbarView: PanelView {
     private(set) var toolButtons: [Tool: ChromeButton] = [:]
@@ -298,7 +299,7 @@ final class ToolbarView: PanelView {
         func add(_ action: ToolbarAction, _ image: NSImage) -> ChromeButton {
             let button = ChromeButton(image: image, tooltip: nil, size: 32) { handler(action) }
             button.onHover = { [unowned self, unowned button] inside in
-                inside ? self.showCard(for: action, at: button) : self.scheduleHide()
+                inside ? self.scheduleShow(for: action, at: button) : self.scheduleHide()
             }
             stack.addArrangedSubview(button)
             return button
@@ -335,9 +336,33 @@ final class ToolbarView: PanelView {
     private var cardAction: ToolbarAction?
     private weak var cardButton: ChromeButton?
     private var hideWork: DispatchWorkItem?
+    private var showWork: DispatchWorkItem?
+    /// How long the pointer must rest on a button before its card appears, so sweeping across the toolbar shows nothing.
+    static let cardDelay: TimeInterval = 0.5
+
+    /// Once a card is up, moving to the next button switches it at once, like system tooltips.
+    private func scheduleShow(for action: ToolbarAction, at button: ChromeButton) {
+        cancelShow()
+        if !hoverCard.isHidden {
+            showCard(for: action, at: button)
+            return
+        }
+        let work = DispatchWorkItem { [weak self, weak button] in
+            guard let self, let button else { return }
+            self.showCard(for: action, at: button)
+        }
+        showWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.cardDelay, execute: work)
+    }
+
+    private func cancelShow() {
+        showWork?.cancel()
+        showWork = nil
+    }
 
     /// Leaves time to move the pointer from the button onto the card.
     private func scheduleHide() {
+        cancelShow()
         hideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.hoverCard.hide() }
         hideWork = work
@@ -370,17 +395,18 @@ final class ToolbarView: PanelView {
 
     // The card belongs to the button under the pointer; any move or hide of the toolbar drops it.
     override var isHidden: Bool {
-        didSet { if isHidden { hoverCard.hide() } }
+        didSet { if isHidden { cancelShow(); hoverCard.hide() } }
     }
 
     override func setFrameOrigin(_ newOrigin: NSPoint) {
-        if newOrigin != frame.origin { hoverCard.hide() }
+        if newOrigin != frame.origin { cancelShow(); hoverCard.hide() }
         super.setFrameOrigin(newOrigin)
     }
 
     /// Above the button for a row (below if there's no room); for a column, on whichever side has room.
     func showCard(for action: ToolbarAction, at button: ChromeButton) {
         guard superview != nil else { return }
+        cancelShow()
         cancelHide()
         hoverCard.hide()
         cardAction = action

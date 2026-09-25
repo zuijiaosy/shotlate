@@ -116,6 +116,8 @@ final class CaptureView: NSView {
     private var tool: Tool?
     private var textEditor: TextEditorView?
     private var editingID: UUID?
+    /// The number badge whose caption is being typed, reselected if the caption is left empty.
+    private var captionedNumberID: UUID?
     private var editingColor = StyleMemory.color(for: .text)
     private var editingSize = StyleMemory.size(for: .text)
     private var editingStyle = StyleMemory.style(for: .text)
@@ -545,8 +547,11 @@ final class CaptureView: NSView {
         mouseDownPoint = p
         didDrag = false
         if textEditor != nil {
+            let wasCaption = captionedNumberID != nil
             commitText()
-            return
+            // With the number tool, the click that ends a caption also places the next number.
+            guard wasCaption, tool == .number else { return }
+            select(nil)
         }
         if window?.firstResponder !== self { window?.makeFirstResponder(self) }
 
@@ -781,9 +786,10 @@ final class CaptureView: NSView {
         case .number:
             let item = AnnotationItem(shape: .number(p), color: color, size: size, style: style)
             mutate { items.append(item) }
-            selectedID = item.id
             invalidate(item.bounds, margin: 16)
-            layoutChrome()
+            // A number is usually followed by its explanation, so start typing right beside it.
+            beginTextEditing(at: CGPoint(x: p.x + size / 2 + 6, y: p.y))
+            captionedNumberID = item.id
         case .pen:
             draft = AnnotationItem(shape: .pen([p]), color: color, size: size, style: style)
             drag = .drawing(p)
@@ -913,6 +919,10 @@ final class CaptureView: NSView {
             items.append(item)
             selectedID = item.id
         }
+        if let id = captionedNumberID, text.isEmpty, items.contains(where: { $0.id == id }) {
+            selectedID = id
+        }
+        captionedNumberID = nil
         editingID = nil
         editor.removeFromSuperview()
         endChange()

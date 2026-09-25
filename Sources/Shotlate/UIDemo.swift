@@ -94,10 +94,16 @@ enum UIDemo {
         drag(CGPoint(x: 100, y: 196), CGPoint(x: 300, y: 196))
         shot("mosaic-brush")
 
+        func type(_ text: String) {
+            (window.firstResponder as? NSTextView)?.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
         key("7", code: 26)
         click(CGPoint(x: 90, y: 110))
-        click(CGPoint(x: 90, y: 250))
+        type("先框选区域")
+        click(CGPoint(x: 90, y: 250)) // ends the caption and places the next number
+        type("再点这里")
         shot("numbers")
+        key("\u{1b}", code: 53) // commit the caption
         key("3", code: 20)
         drag(CGPoint(x: 460, y: 250), CGPoint(x: 660, y: 290))
 
