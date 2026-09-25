@@ -582,3 +582,37 @@ import Testing
         #expect(t.handle(.up, at: CGPoint(x: 7, y: 6), modifiersHeld: true) == .cancel)
     }
 }
+
+@Suite struct HotCornerTests {
+    let screens = [CGRect(x: 0, y: 0, width: 1440, height: 900), CGRect(x: 1440, y: 0, width: 1920, height: 1080)]
+
+    @Test func findsCorners() {
+        let d = HotCornerDetector()
+        #expect(d.corner(at: CGPoint(x: 0, y: 899), screens: screens)! == (.topLeft, 0))
+        #expect(d.corner(at: CGPoint(x: 1439, y: 0), screens: screens)! == (.bottomRight, 0))
+        #expect(d.corner(at: CGPoint(x: 1441, y: 1079), screens: screens)! == (.topLeft, 1))
+        #expect(d.corner(at: CGPoint(x: 700, y: 899), screens: screens) == nil)
+    }
+
+    @Test func firesOnceAfterDwell() {
+        var d = HotCornerDetector(dwell: 0.3)
+        let t0 = Date(timeIntervalSince1970: 0)
+        let corner = CGPoint(x: 1, y: 1)
+        #expect(d.update(corner, screens: screens, now: t0) == nil)
+        #expect(d.update(corner, screens: screens, now: t0.addingTimeInterval(0.2)) == nil)
+        #expect(d.update(corner, screens: screens, now: t0.addingTimeInterval(0.35)) == .bottomLeft)
+        #expect(d.update(corner, screens: screens, now: t0.addingTimeInterval(1)) == nil)
+        // Leave and come back: fires again.
+        #expect(d.update(CGPoint(x: 400, y: 400), screens: screens, now: t0.addingTimeInterval(1.1)) == nil)
+        #expect(d.update(corner, screens: screens, now: t0.addingTimeInterval(1.2)) == nil)
+        #expect(d.update(corner, screens: screens, now: t0.addingTimeInterval(1.6)) == .bottomLeft)
+    }
+
+    @Test func passingThroughDoesNotFire() {
+        var d = HotCornerDetector(dwell: 0.3)
+        let t0 = Date(timeIntervalSince1970: 0)
+        #expect(d.update(CGPoint(x: 1, y: 1), screens: screens, now: t0) == nil)
+        #expect(d.update(CGPoint(x: 50, y: 50), screens: screens, now: t0.addingTimeInterval(0.1)) == nil)
+        #expect(d.update(CGPoint(x: 1, y: 1), screens: screens, now: t0.addingTimeInterval(0.35)) == nil)
+    }
+}

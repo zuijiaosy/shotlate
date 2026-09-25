@@ -25,6 +25,7 @@ final class SettingsModel: ObservableObject {
     @Published var captureCursor = Settings.shared.captureCursor
     @Published var detectElements = Settings.shared.detectElements
     @Published var superSnip = Settings.shared.superSnip
+    @Published var hotCorners = Settings.shared.hotCorners
     @Published var magnifierZoom = Settings.shared.magnifierZoom
     @Published var magnifierGrid = Settings.shared.magnifierGrid
     @Published var magnifierHidden = Settings.shared.magnifierHidden
@@ -76,6 +77,8 @@ final class SettingsModel: ObservableObject {
         s.captureCursor = captureCursor
         s.detectElements = detectElements
         s.superSnip = superSnip
+        s.hotCorners = hotCorners
+        HotCornerMonitor.shared.reload()
         s.magnifierZoom = magnifierZoom
         s.magnifierGrid = magnifierGrid
         s.magnifierHidden = magnifierHidden
@@ -301,6 +304,20 @@ struct SettingsView: View {
                 Text("快捷键命令")
             } footer: {
                 Text("命令可以是 snap:// 链接，或 Snipaste 风格的命令行（snip、paste、toggle-images、whiteboard、barcode-scan、switch-group），见 README「自动化」。「忽略这些应用」填应用名、Bundle ID 或路径片段，用逗号分隔；这些应用在前台时 Snap 的所有快捷键暂时失效，按键直接交给它们。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                ForEach([(ScreenCorner.topLeft, "左上角"), (.topRight, "右上角"), (.bottomLeft, "左下角"), (.bottomRight, "右下角")], id: \.0) { corner, title in
+                    Picker(title, selection: Binding(get: { model.hotCorners[corner] ?? "" }, set: { model.hotCorners[corner] = $0 })) {
+                        ForEach(HotCornerMonitor.choices, id: \.command) { Text($0.title).tag($0.command) }
+                    }
+                }
+            } header: {
+                Text("屏幕触发角")
+            } footer: {
+                Text("鼠标在屏幕角落停留片刻即执行。如果系统设置里的「触发角」也用了同一个角，两者会同时生效。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

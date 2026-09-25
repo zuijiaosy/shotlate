@@ -190,6 +190,15 @@ final class Settings {
         set { defaults.set(newValue, forKey: "capture.detectElements") }
     }
 
+    /// Command per screen corner (empty for none), run when the pointer rests there.
+    var hotCorners: [ScreenCorner: String] {
+        get {
+            let raw = defaults.dictionary(forKey: "hotCorners") as? [String: String] ?? [:]
+            return Dictionary(uniqueKeysWithValues: raw.compactMap { k, v in ScreenCorner(rawValue: k).map { ($0, v) } })
+        }
+        set { defaults.set(Dictionary(uniqueKeysWithValues: newValue.map { ($0.key.rawValue, $0.value) }), forKey: "hotCorners") }
+    }
+
     /// Pixels shown per screen pixel in the capture loupe: 4, 8 or 12.
     var magnifierZoom: Int {
         get { defaults.object(forKey: "magnifier.zoom") as? Int ?? 8 }

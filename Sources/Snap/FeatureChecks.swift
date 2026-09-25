@@ -50,6 +50,7 @@ enum FeatureChecks {
         ("super-snip", superSnip),
         ("print", printing),
         ("loupe", loupe),
+        ("hot-corners", hotCorners),
     ]
 
     @MainActor
@@ -1269,5 +1270,26 @@ enum FeatureChecks {
                                        characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 58)!
         h.view.flagsChanged(with: release)
         expect(!h.view.testing_magnifierVisible, "releasing ⌥ hides it again")
+    }
+
+    @MainActor static func hotCorners() async {
+        let settings = Settings.shared
+        defer { settings.hotCorners = [:]; HotCornerMonitor.shared.reload() }
+        settings.hotCorners = [:]
+        HotCornerMonitor.shared.reload()
+        expect(!HotCornerMonitor.shared.isRunning, "no corners set: nothing polls")
+        settings.hotCorners = [.topRight: "toggle-images"]
+        HotCornerMonitor.shared.reload()
+        expect(HotCornerMonitor.shared.isRunning, "a corner with a command starts watching")
+        expect(HotCornerMonitor.choices.allSatisfy { $0.command.isEmpty || Automation.parse(command: $0.command) != nil }, "every corner choice is a valid command")
+        let m = PinManager.shared
+        let pin = m.pin(sampleRep(), frame: CGRect(x: -4000, y: -4000, width: 120, height: 80))
+        HotCornerMonitor.shared.run(.topRight)
+        expect(!pin.isVisible && m.isHidingAll, "the top-right corner hides the pins")
+        HotCornerMonitor.shared.run(.topRight)
+        expect(pin.isVisible, "again shows them")
+        HotCornerMonitor.shared.run(.bottomLeft)
+        expect(pin.isVisible, "a corner without a command does nothing")
+        m.closeAll()
     }
 }
