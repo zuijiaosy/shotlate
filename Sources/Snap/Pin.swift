@@ -368,6 +368,8 @@ final class PinWindow: NSPanel {
             destroy()
         } else if event.keyCode == 53 || (flags == .command && key == "w") {
             close(keepInHistory: true)
+        } else if flags.isEmpty, key == " " {
+            annotate()
         } else if flags.isEmpty, let action = Self.digitActions[key] {
             action(self)()
         } else if flags.subtracting(.shift).isEmpty, key == "=" || key == "+" {
@@ -462,6 +464,21 @@ final class PinWindow: NSPanel {
         ShareController.share(rep, relativeTo: pinView)
     }
 
+    /// Replaces the picture after annotating; the pin keeps its place and zoom.
+    func replaceImage(_ newRep: NSBitmapImageRep) {
+        let zoomNow = zoom
+        rep = newRep
+        id = UUID()
+        baseSize = newRep.size
+        pinView.image = image(from: newRep)
+        setZoom(zoomNow, anchor: CGPoint(x: frame.minX, y: frame.maxY), flash: false)
+        PinStore.shared.scheduleSave()
+    }
+
+    @objc func annotate() {
+        CaptureSession.beginPinEdit(self)
+    }
+
     @objc func toggleSolo() { PinManager.shared.toggleSolo(self) }
 
     @objc func moveToGroup(_ sender: NSMenuItem) {
@@ -547,6 +564,8 @@ final class PinWindow: NSPanel {
             menu.addItem(copyTextItem)
         }
         menu.addItem(item("保存", #selector(saveImage), "s"))
+        menu.addItem(item("标注…", #selector(annotate), " "))
+        menu.items.last?.keyEquivalentModifierMask = []
         menu.addItem(item("识别文字", #selector(recognizeText)))
         menu.addItem(item("分享…", #selector(share)))
         menu.addItem(.separator())

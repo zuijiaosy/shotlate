@@ -38,6 +38,7 @@ enum FeatureChecks {
         ("share", shareFile),
         ("boards", boards),
         ("elements", elements),
+        ("pin-annotate", pinAnnotate),
     ]
 
     @MainActor
@@ -945,5 +946,50 @@ enum FeatureChecks {
             print("SKIP  real collector: this process has no Accessibility permission")
         }
         win.orderOut(nil)
+    }
+
+    @MainActor static func pinAnnotate() async {
+        let screen = CGRect(x: -4100, y: -4100, width: 800, height: 600)
+        let pin = PinManager.shared.pin(sampleRep(CGSize(width: 200, height: 100), color: .white), frame: CGRect(x: -4000, y: -4000, width: 200, height: 100))
+        pin.setZoom(1.5, anchor: CGPoint(x: -4000, y: -3900), flash: false)
+        let zoomedFrame = pin.frame
+        guard let session = CaptureSession.beginPinEdit(pin, in: screen) else { return expect(false, "pin editing starts") }
+        let view = session.testing_views[0]
+        expect(!pin.isVisible, "the pin hides while its copy is being edited")
+        let local = view.testing_selection ?? .zero
+        expect(local.size == CGSize(width: 200, height: 100), "editing happens at 100% (\(local))")
+        StyleMemory.setColor(StyleState.palette[0], for: .rectangle)
+        StyleMemory.setStyle(ItemStyle(), for: .rectangle) // earlier checks may have left it dashed
+        StyleMemory.sizes[.rectangle] = 4
+        func mouse(_ type: NSEvent.EventType, _ p: CGPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: view.convert(p, to: nil), modifierFlags: [], timestamp: 0,
+                               windowNumber: view.window!.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        func key(_ chars: String, _ code: UInt16) {
+            view.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                                characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)!)
+        }
+        key("r", 15)
+        view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: local.minX + 20, y: local.minY + 20)))
+        view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: local.minX + 120, y: local.minY + 70)))
+        view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: local.minX + 120, y: local.minY + 70)))
+        let oldID = pin.id
+        key("\r", 36)
+        expect(session.isFinished && pin.isVisible, "Return finishes and shows the pin again")
+        expect(pin.id != oldID && pin.rep.size == CGSize(width: 200, height: 100), "the pin now has the annotated image at full size")
+        let c = pin.rep.color(atPoint: CGPoint(x: 20, y: 45))!
+        expect(c.redComponent > 0.8 && c.greenComponent < 0.4, "the rectangle is baked into the pin (\(c))")
+        expect(abs(pin.zoom - 1.5) < 0.001 && abs(pin.frame.minX - zoomedFrame.minX) < 0.5 && abs(pin.frame.maxY - zoomedFrame.maxY) < 0.5,
+               "the pin is back at 150% in the same place")
+        write(pin.rep, "pin-annotated.png")
+
+        // Esc throws edits away.
+        let before = pin.id
+        guard let second = CaptureSession.beginPinEdit(pin, in: screen) else { return expect(false, "second edit") }
+        let v2 = second.testing_views[0]
+        v2.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                          characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!)
+        expect(second.isFinished && pin.id == before && pin.isVisible, "Esc leaves the pin unchanged")
+        PinManager.shared.closeAll()
     }
 }

@@ -77,13 +77,19 @@ private enum TranslationState {
     case hidden([TranslatedBlock], CGRect)
 }
 
-enum OutputAction { case copy, save, saveAs }
+enum OutputAction {
+    case copy, save, saveAs
+    /// Finish editing a pin: bake the annotations into it (in a normal capture this is the same as copy).
+    case apply
+}
 
 /// A normal screenshot, a whiteboard (drawing on a solid canvas), or a transparent board over the live screen.
 enum CaptureMode: Equatable {
     case screenshot
     case whiteboard
     case transparentBoard
+    /// Annotating a pin: the pin's image is the canvas, everything else stays live and untouched.
+    case pinEdit
 
     var isBoard: Bool { self != .screenshot }
 }
@@ -279,9 +285,16 @@ final class CaptureView: NSView {
         return []
     }
 
+    /// Pin editing: the pin's rect is the canvas.
+    func startPinEdit(rect: CGRect) {
+        selection = rect.intersection(bounds)
+        commitSelection()
+        showToast("在贴图上标注 · ✓ 或回车完成 · Esc 放弃", duration: 2.5)
+    }
+
     /// Boards start with the whole screen selected and the pen in hand.
     func startBoard() {
-        guard mode.isBoard else { return }
+        guard mode == .whiteboard || mode == .transparentBoard else { return }
         selection = bounds
         commitSelection()
         setTool(.pen)
@@ -318,7 +331,17 @@ final class CaptureView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         if mode.isBoard {
             // No dimming, border or handles: the whole screen is the canvas.
-            renderer.drawOverlays(items: items, draft: draft, hiddenID: editingID, translation: [])
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: selection).addClip()
+            renderer.drawOverlays(items: items, draft: draft, hiddenID: editingID, translation: peekingOriginal ? [] : visibleTranslation)
+            if case .loading = translationState { drawShimmer() }
+            NSGraphicsContext.restoreGraphicsState()
+            if mode == .pinEdit {
+                selectionBlue.setStroke()
+                let border = NSBezierPath(rect: selection.insetBy(dx: -0.75, dy: -0.75))
+                border.lineWidth = 1.5
+                border.stroke()
+            }
             drawItemDecorations()
             return
         }
@@ -1349,7 +1372,7 @@ final class CaptureView: NSView {
         }
 
         if code == 36 || code == 76 {
-            if polyPoints != nil { finishPolyline() } else { finish(.copy) }
+            if polyPoints != nil { finishPolyline() } else { finish(.apply) }
             return
         }
         if code == 51 || code == 117 {
@@ -1396,7 +1419,7 @@ final class CaptureView: NSView {
 
     /// Esc steps back one level at a time; it only closes the capture when there is nothing left to back out of.
     private func handleEscape() {
-        if mode.isBoard, polyPoints == nil, textEditor == nil, selectedID == nil {
+        if mode.isBoard, mode != .pinEdit, polyPoints == nil, textEditor == nil, selectedID == nil {
             if escapeArmed {
                 session?.cancel()
             } else {
@@ -1586,9 +1609,9 @@ final class CaptureView: NSView {
         case .translate:
             runTranslation()
         case .pin:
-            pinSelection()
+            if mode == .pinEdit { finish(.apply) } else { pinSelection() }
         case .longCapture:
-            startLongCapture()
+            if mode == .screenshot { startLongCapture() } else { showToast("这里不能长截图") }
         case .cancel:
             session?.cancel()
         case .save:
@@ -1596,7 +1619,7 @@ final class CaptureView: NSView {
         case .share:
             shareSelection()
         case .done:
-            finish(.copy)
+            finish(.apply)
         }
     }
 
@@ -1813,6 +1836,26 @@ final class CaptureView: NSView {
         ScrollCaptureController.start(rect: rect, screen: screen)
     }
 
+    /// Bakes the annotations into the pin; ⌘C and ⌘S also copy or save the result.
+    private func finishPinEdit(_ output: OutputAction) {
+        guard let rep = exportImage(format: .png) else {
+            showToast("导出图片失败")
+            return
+        }
+        switch output {
+        case .copy:
+            Exporter.copy(rep)
+        case .save, .saveAs:
+            let settings = Settings.shared
+            if let saved = exportImage(format: settings.imageFormat) {
+                _ = try? Exporter.save(saved, format: settings.imageFormat, directory: settings.saveDirectory)
+            }
+        case .apply:
+            break
+        }
+        session?.applyPinEdit(rep)
+    }
+
     /// With auto-save on, copying or pinning also writes the file. Returns the short path, or nil when off or failed.
     private func autoSaveIfEnabled(base: CGImage? = nil) -> String? {
         let settings = Settings.shared
@@ -1839,6 +1882,11 @@ final class CaptureView: NSView {
             return
         }
         if !mode.isBoard { StyleMemory.lastSelection[displayID] = selection }
+        if mode == .pinEdit {
+            finishPinEdit(output)
+            return
+        }
+        let output: OutputAction = output == .apply ? .copy : output
         let settings = Settings.shared
         let format: ImageFormat = output == .copy ? .png : settings.imageFormat
         guard let rep = exportImage(format: format, base: base) else {
@@ -1866,6 +1914,8 @@ final class CaptureView: NSView {
             }
         case .saveAs:
             session?.presentSavePanel(rep: rep, format: format)
+        case .apply:
+            break // mapped to .copy above
         }
     }
 }

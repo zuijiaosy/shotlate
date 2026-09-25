@@ -152,6 +152,60 @@ final class CaptureSession {
         return ctx.makeImage()!
     }
 
+    // MARK: Pin editing
+
+    private weak var editingPin: PinWindow?
+    private var editingPinZoom: CGFloat = 1
+
+    /// Opens the annotation tools over `pin`. `frame` overrides the screen frame (for offscreen checks).
+    @discardableResult
+    static func beginPinEdit(_ pin: PinWindow, in frame: CGRect? = nil) -> CaptureSession? {
+        guard current == nil, !isStarting else { return nil }
+        pin.exitThumbnail()
+        let zoom = pin.zoom
+        // Edit at 100% so the pin keeps its full resolution.
+        pin.setZoom(1, anchor: CGPoint(x: pin.frame.minX, y: pin.frame.maxY), flash: false)
+        let screen = pin.screen ?? NSScreen.screens.first { $0.frame.intersects(pin.frame) } ?? NSScreen.main
+        guard let screenFrame = frame ?? screen?.frame else { return nil }
+        let scale = screen?.backingScaleFactor ?? 2
+        let local = CGRect(x: pin.frame.minX - screenFrame.minX, y: screenFrame.maxY - pin.frame.maxY,
+                           width: pin.frame.width, height: pin.frame.height)
+        let image = pinCanvas(pin.rep, at: local, screenSize: screenFrame.size, scale: scale)
+
+        let session = CaptureSession(previousApp: NSWorkspace.shared.frontmostApplication)
+        let window = OverlayWindow(screen: screen ?? NSScreen.screens[0])
+        window.setFrame(screenFrame, display: false)
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.ignoresMouseEvents = false
+        session.editingPin = pin
+        session.editingPinZoom = zoom
+        let displayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+        session.install(window: window, image: image, displayID: displayID, mode: .pinEdit)
+        current = session
+        pin.orderOut(nil)
+        if frame == nil { session.show() }
+        session.views[0].startPinEdit(rect: local)
+        return session
+    }
+
+    /// A transparent screen-size image with the pin drawn where it sits.
+    private static func pinCanvas(_ rep: NSBitmapImageRep, at rect: CGRect, screenSize: CGSize, scale: CGFloat) -> CGImage {
+        let ctx = CGContext(data: nil, width: Int(screenSize.width * scale), height: Int(screenSize.height * scale), bitsPerComponent: 8,
+                            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.interpolationQuality = .high
+        if let cg = rep.cgImage {
+            // CG's origin is bottom-left.
+            ctx.draw(cg, in: CGRect(x: rect.minX * scale, y: (screenSize.height - rect.maxY) * scale, width: rect.width * scale, height: rect.height * scale))
+        }
+        return ctx.makeImage()!
+    }
+
+    func applyPinEdit(_ rep: NSBitmapImageRep) {
+        editingPin?.replaceImage(rep)
+        finish()
+    }
+
     private func install(window: OverlayWindow, image: CGImage, displayID: CGDirectDisplayID, mode: CaptureMode) {
         let local = CGRect(origin: .zero, size: window.frame.size)
         let view = CaptureView(frame: local, snapshot: image, windowRects: [], displayID: displayID, mode: mode)
@@ -398,6 +452,14 @@ final class CaptureSession {
 
     func finish() {
         isFinished = true
+        if let pin = editingPin {
+            editingPin = nil
+            if PinManager.shared.isShown(pin) { pin.orderFrontRegardless() }
+            if abs(editingPinZoom - 1) > 0.001 {
+                pin.setZoom(editingPinZoom, anchor: CGPoint(x: pin.frame.minX, y: pin.frame.maxY), flash: false)
+            }
+            pin.makeKey()
+        }
         for view in views { view.tearDown() }
         for window in windows {
             window.orderOut(nil)
