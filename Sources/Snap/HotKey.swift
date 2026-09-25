@@ -8,6 +8,7 @@ final class HotKeyCenter {
         case capture = 1
         case pinClipboard = 2
         case togglePins = 3
+        case scanCode = 4
     }
 
     static let shared = HotKeyCenter()

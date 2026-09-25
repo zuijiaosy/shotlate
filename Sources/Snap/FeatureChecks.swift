@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import SnapCore
 
 /// Scripted behaviour checks that need AppKit (windows, pasteboard, rendering) and so can't live in SnapCore's tests.
@@ -33,6 +34,7 @@ enum FeatureChecks {
         ("item-styles", itemStyles),
         ("cursor", cursorCapture),
         ("refresh", refreshCapture),
+        ("scan-code", scanCode),
     ]
 
     @MainActor
@@ -789,5 +791,29 @@ enum FeatureChecks {
         }
         expect(refreshed.historyEntry() != nil, "a refreshed capture is recorded again when output")
         session.finish()
+    }
+
+    @MainActor static func scanCode() async {
+        func qr(_ text: String) -> CIImage {
+            let filter = CIFilter(name: "CIQRCodeGenerator")!
+            filter.setValue(Data(text.utf8), forKey: "inputMessage")
+            return filter.outputImage!.transformed(by: CGAffineTransform(scaleX: 8, y: 8))
+        }
+        // Two codes placed on a big light "screen", like a web page with a QR code on it.
+        let size = CGSize(width: 1600, height: 1000)
+        let ctx = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(CGColor(gray: 0.95, alpha: 1))
+        ctx.fill(CGRect(origin: .zero, size: size))
+        let ci = CIContext()
+        ctx.draw(ci.createCGImage(qr("https://snap.example/app"), from: qr("https://snap.example/app").extent)!, in: CGRect(x: 200, y: 300, width: 264, height: 264))
+        ctx.draw(ci.createCGImage(qr("WIFI:S:Office;P:12345678;;"), from: qr("WIFI:S:Office;P:12345678;;").extent)!, in: CGRect(x: 1000, y: 500, width: 296, height: 296))
+        let screen = ctx.makeImage()!
+        let codes = await CodeScanner.scan([screen, screen])
+        expect(codes.count == 2 && codes.contains("https://snap.example/app") && codes.contains("WIFI:S:Office;P:12345678;;"),
+               "finds both codes on the screen, without duplicates across screens (\(codes))")
+        let blank = sampleRep(CGSize(width: 400, height: 300), color: .white).cgImage!
+        let none = await CodeScanner.scan([blank])
+        expect(none.isEmpty, "a screen without codes finds nothing")
     }
 }

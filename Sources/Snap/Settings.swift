@@ -134,6 +134,15 @@ final class Settings {
         set { setOptionalShortcut(newValue, "pin.toggleShortcut") }
     }
 
+    /// Not set by default: scanning is an occasional action and shouldn't take a key combination unasked.
+    var scanCodeShortcut: Shortcut? {
+        get {
+            guard let data = defaults.data(forKey: "scan.shortcut") else { return nil }
+            return try? JSONDecoder().decode(Shortcut.self, from: data)
+        }
+        set { setOptionalShortcut(newValue, "scan.shortcut") }
+    }
+
     /// A missing key means "never set", which gets the default; empty data means the user cleared it.
     private func optionalShortcut(_ key: String, default value: Shortcut) -> Shortcut? {
         guard let data = defaults.data(forKey: key) else { return value }

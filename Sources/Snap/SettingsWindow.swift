@@ -3,7 +3,7 @@ import ServiceManagement
 import SnapCore
 import SwiftUI
 
-enum ShortcutTarget { case capture, pinClipboard, togglePins }
+enum ShortcutTarget { case capture, pinClipboard, togglePins, scanCode }
 
 final class SettingsModel: ObservableObject {
     @Published var baseURL = Settings.shared.baseURL
@@ -15,6 +15,7 @@ final class SettingsModel: ObservableObject {
     @Published var shortcut = Settings.shared.shortcut
     @Published var pinShortcut = Settings.shared.pinClipboardShortcut
     @Published var togglePinsShortcut = Settings.shared.togglePinsShortcut
+    @Published var scanCodeShortcut = Settings.shared.scanCodeShortcut
     @Published var recording: ShortcutTarget?
     @Published var playSound = Settings.shared.playSound
     @Published var copyAsFile = Settings.shared.copyAsFile
@@ -52,6 +53,7 @@ final class SettingsModel: ObservableObject {
         s.shortcut = shortcut
         s.pinClipboardShortcut = pinShortcut
         s.togglePinsShortcut = togglePinsShortcut
+        s.scanCodeShortcut = scanCodeShortcut
         s.playSound = playSound
         s.copyAsFile = copyAsFile
         s.captureCursor = captureCursor
@@ -131,6 +133,7 @@ final class SettingsModel: ObservableObject {
                 case .capture: self.shortcut = shortcut
                 case .pinClipboard: self.pinShortcut = shortcut
                 case .togglePins: self.togglePinsShortcut = shortcut
+                case .scanCode: self.scanCodeShortcut = shortcut
                 case nil: break
                 }
                 self.stopRecordingShortcut()
@@ -179,6 +182,7 @@ struct SettingsView: View {
                 }
                 optionalShortcutRow("从剪贴板贴图", .pinClipboard, $model.pinShortcut)
                 optionalShortcutRow("隐藏 / 显示全部贴图", .togglePins, $model.togglePinsShortcut)
+                optionalShortcutRow("扫描屏幕上的二维码", .scanCode, $model.scanCodeShortcut)
                 LabeledContent("保存位置") {
                     HStack {
                         Text(model.saveDirectory.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))

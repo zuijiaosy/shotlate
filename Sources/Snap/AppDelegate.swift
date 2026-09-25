@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var cancelDelayItem: NSMenuItem!
     private var replayItem: NSMenuItem!
     private var groupsItem: NSMenuItem!
+    private var scanItem: NSMenuItem!
     private let countdown = Countdown()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -38,6 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(cancelDelayItem)
         replayItem = item("回放上一次截图", #selector(replayHistory))
         menu.addItem(replayItem)
+        scanItem = item("扫描屏幕上的二维码 / 条形码", #selector(scanCodes))
+        menu.addItem(scanItem)
         menu.addItem(.separator())
         pinClipboardItem = item("从剪贴板贴图", #selector(pinClipboard))
         menu.addItem(pinClipboardItem)
@@ -102,10 +105,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let toggle = settings.togglePinsShortcut
         let toggleOK = HotKeyCenter.shared.register(.togglePins, shortcut: toggle) { PinManager.shared.toggleHidden() }
+        registerScanHotKey()
         togglePinsShortcutLabel = toggle.map { toggleOK ? "（\($0.displayString)）" : "（快捷键 \($0.displayString) 已被占用）" } ?? ""
     }
 
     private var togglePinsShortcutLabel = ""
+
+    private func registerScanHotKey() {
+        let scan = Settings.shared.scanCodeShortcut
+        let ok = HotKeyCenter.shared.register(.scanCode, shortcut: scan) { CodeScanner.scanScreens() }
+        scanItem.title = "扫描屏幕上的二维码 / 条形码" + (scan.map { ok ? "（\($0.displayString)）" : "（快捷键 \($0.displayString) 已被占用）" } ?? "")
+    }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         let pins = PinManager.shared
@@ -194,6 +204,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? nil : name
+    }
+
+    @objc private func scanCodes() {
+        // Let the menu close first so it doesn't cover a code.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { CodeScanner.scanScreens() }
     }
 
     @objc private func replayHistory() {

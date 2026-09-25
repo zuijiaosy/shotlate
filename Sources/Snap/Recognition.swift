@@ -100,3 +100,60 @@ enum TranslationLayout {
         NSColor(srgbRed: CGFloat(c.r) / 255, green: CGFloat(c.g) / 255, blue: CGFloat(c.b) / 255, alpha: 1)
     }
 }
+
+/// Finds QR codes and barcodes anywhere on the screens, for "scan code" without taking a screenshot first.
+enum CodeScanner {
+    /// Payloads found in `images`, in order, without duplicates.
+    static func scan(_ images: [CGImage]) async -> [String] {
+        await Task.detached(priority: .userInitiated) {
+            var found: [String] = []
+            for image in images {
+                let request = VNDetectBarcodesRequest()
+                try? VNImageRequestHandler(cgImage: image).perform([request])
+                for payload in (request.results ?? []).compactMap(\.payloadStringValue) where !found.contains(payload) {
+                    found.append(payload)
+                }
+            }
+            return found
+        }.value
+    }
+
+    /// Captures every screen, scans it, copies what was found and offers to open a link.
+    static func scanScreens() {
+        guard CaptureEngine.hasPermission else {
+            CaptureSession.requestPermission()
+            return
+        }
+        Task { @MainActor in
+            do {
+                let images = try await CaptureEngine.captureScreens().map(\.image)
+                let codes = await scan(images)
+                present(codes)
+            } catch {
+                HUD.show("扫码失败：\(error.localizedDescription)")
+            }
+        }
+    }
+
+    static func present(_ codes: [String]) {
+        guard !codes.isEmpty else {
+            HUD.show("屏幕上没有找到二维码或条形码")
+            return
+        }
+        let text = codes.joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        let links = codes.compactMap { URL(string: $0) }.filter { ["http", "https"].contains($0.scheme?.lowercased() ?? "") }
+        guard let link = links.first else {
+            HUD.show(codes.count == 1 ? "已复制：\(text)" : "找到 \(codes.count) 个码，已全部复制")
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = codes.count == 1 ? "识别到链接，已复制" : "识别到 \(codes.count) 个码，已全部复制"
+        alert.informativeText = link.absoluteString
+        alert.addButton(withTitle: "在浏览器中打开")
+        alert.addButton(withTitle: "好")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(link) }
+    }
+}
