@@ -53,6 +53,7 @@ enum FeatureChecks {
         ("hot-corners", hotCorners),
         ("redact", redact),
         ("ocr-structure", ocrStructure),
+        ("pin-translate", pinTranslate),
     ]
 
     @MainActor
@@ -1346,5 +1347,32 @@ enum FeatureChecks {
         print("OCR code output:\n\(indented)")
         let second = indented.split(separator: "\n").dropFirst().first.map(String.init) ?? ""
         expect(second.hasPrefix("    ") && second.trimmingCharacters(in: .whitespaces).hasPrefix("return"), "代码 keeps the body indented")
+    }
+
+    @MainActor static func pinTranslate() async {
+        let h = CaptureHarness(lines: ["Settings", "Automatically check for updates", "Save screenshots to Pictures"])
+        h.select(CGRect(x: 60, y: 60, width: 420, height: 110))
+        guard let rep = h.export() else { return expect(false, "export") }
+        let pin = PinManager.shared.pin(rep, frame: CGRect(origin: CGPoint(x: -4000, y: -4000), size: rep.size))
+        var sent: [String] = []
+        pin.translateUsesDefault = false
+        pin.translate = { rep in
+            try await ImageTranslator.translate(rep) { items in
+                sent = items.map(\.text)
+                return Dictionary(uniqueKeysWithValues: items.map { ($0.id, "译文\($0.id)：检查更新") })
+            }
+        }
+        let original = pin.rep
+        key(pin, "y", code: 16)
+        for _ in 0..<400 where !pin.showsTranslation { try? await Task.sleep(for: .milliseconds(100)) }
+        expect(pin.showsTranslation && pin.rep !== original, "Y translates the pin in place")
+        expect(sent.contains { $0.contains("Automatically check for updates") }, "the pin's text was sent for translation (\(sent))")
+        expect(pin.rep.size == original.size && pin.frame.size == original.size, "the translated pin keeps its size")
+        write(pin.rep, "pin-translated.png")
+        key(pin, "y", code: 16)
+        expect(!pin.showsTranslation && pin.rep === original, "Y again shows the original")
+        key(pin, "y", code: 16)
+        expect(pin.showsTranslation, "and back to the translation without translating again")
+        PinManager.shared.closeAll()
     }
 }

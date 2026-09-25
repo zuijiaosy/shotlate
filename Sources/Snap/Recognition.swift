@@ -170,3 +170,36 @@ enum CodeScanner {
         if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(link) }
     }
 }
+
+/// Translates the text in an image and draws the translation over the original, like `Y` in a capture.
+enum ImageTranslator {
+    enum Failure: LocalizedError {
+        case nothingToTranslate
+        var errorDescription: String? { "没有找到需要翻译的外文" }
+    }
+
+    /// `send` translates the paragraphs; by default the configured model, through the shared cache.
+    static func translate(_ rep: NSBitmapImageRep,
+                          send: (([ChatTranslator.Item]) async throws -> [Int: String])? = nil) async throws -> NSBitmapImageRep {
+        guard let cg = rep.cgImage else { throw CocoaError(.featureUnsupported) }
+        let bounds = CGRect(origin: .zero, size: rep.size)
+        let result = try await TextRecognizer.recognize(cg, selection: bounds)
+        let blocks = TextBlockBuilder.group(result.lines).filter { TextBlockBuilder.shouldTranslate($0.text) }
+        guard !blocks.isEmpty else { throw Failure.nothingToTranslate }
+        let items = blocks.map { ChatTranslator.Item(id: $0.id, text: $0.text) }
+        let translations: [Int: String]
+        if let send {
+            translations = try await send(items)
+        } else {
+            let config = Settings.shared.translationConfig
+            translations = try await TranslationService.cache.translate(items, config: config) { try await ChatTranslator.translate($0, config: config) }
+        }
+        let laidOut = TranslationLayout.layout(blocks: blocks, translations: translations, crop: cg, selection: bounds)
+        let base = NSImage(cgImage: cg, size: rep.size)
+        let renderer = ContentRenderer(base: base, bounds: bounds, effect: { _ in base })
+        guard let out = Exporter.render(renderer: renderer, selection: bounds, scale: CGFloat(cg.width) / rep.size.width, items: [],
+                                        translation: laidOut, options: ExportOptions(cornerRadius: 0, shadow: false, format: .png))
+        else { throw CocoaError(.fileWriteUnknown) }
+        return out
+    }
+}

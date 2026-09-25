@@ -432,6 +432,8 @@ final class PinWindow: NSPanel {
             close(keepInHistory: true)
         } else if flags.isEmpty, key == " " {
             annotate()
+        } else if flags.isEmpty, key == "y" {
+            toggleTranslation()
         } else if flags.isEmpty, let action = Self.digitActions[key] {
             action(self)()
         } else if flags.subtracting(.shift).isEmpty, key == "=" || key == "+" {
@@ -481,6 +483,8 @@ final class PinWindow: NSPanel {
     /// Keeps only the thumbnail's region, for good.
     @objc func cropToThumbnail() {
         guard let region = thumbnail, let cg = rep.cgImage else { return }
+        translationPair = nil
+        showsTranslation = false
         let sx = CGFloat(cg.width) / rep.size.width, sy = CGFloat(cg.height) / rep.size.height
         guard let cropped = cg.cropping(to: CGRect(x: region.minX * sx, y: region.minY * sy, width: region.width * sx, height: region.height * sy).integral)
         else { return }
@@ -560,6 +564,56 @@ final class PinWindow: NSPanel {
 
     @objc func closeFromMenu() { close(keepInHistory: true) }
 
+    // MARK: Translation
+
+    /// The untranslated and translated pictures once translated; `Y` switches between them.
+    private var translationPair: (original: NSBitmapImageRep, translated: NSBitmapImageRep)?
+    private(set) var showsTranslation = false
+    private var isTranslating = false
+    /// Replaceable for the self-checks, which translate without a network.
+    var translate: (NSBitmapImageRep) async throws -> NSBitmapImageRep = { try await ImageTranslator.translate($0) }
+
+    @objc func toggleTranslation() {
+        if let pair = translationPair {
+            showsTranslation.toggle()
+            swapImage(showsTranslation ? pair.translated : pair.original)
+            pinView.flash(showsTranslation ? "译文" : "原文")
+            return
+        }
+        guard !isTranslating else { return }
+        // Only the real translator needs the key; checking it reads the Keychain.
+        if translateUsesDefault, Settings.shared.apiKey.isEmpty {
+            pinView.flash("请先在设置里填写翻译的 API Key")
+            return
+        }
+        isTranslating = true
+        pinView.flash("正在翻译…")
+        let original = rep
+        Task { @MainActor in
+            defer { isTranslating = false }
+            do {
+                let translated = try await translate(original)
+                translationPair = (original, translated)
+                showsTranslation = true
+                swapImage(translated)
+                pinView.flash("已翻译 · Y 切换原文")
+            } catch {
+                pinView.flash((error as? LocalizedError)?.errorDescription ?? "翻译失败")
+            }
+        }
+    }
+
+    /// Whether `translate` is still the real translator (then an API key is needed).
+    var translateUsesDefault = true
+
+    /// Shows another picture of the same size without resetting zoom or position.
+    private func swapImage(_ newRep: NSBitmapImageRep) {
+        rep = newRep
+        id = UUID()
+        refreshImage()
+        PinStore.shared.scheduleSave()
+    }
+
     @objc func printImage() {
         Printer.print(displayedRep)
     }
@@ -570,6 +624,8 @@ final class PinWindow: NSPanel {
 
     /// Replaces the picture after annotating; the pin keeps its place and zoom.
     func replaceImage(_ newRep: NSBitmapImageRep) {
+        translationPair = nil
+        showsTranslation = false
         let zoomNow = zoom
         rep = newRep
         id = UUID()
@@ -621,6 +677,8 @@ final class PinWindow: NSPanel {
 
     private func transform(_ t: Transform) {
         exitThumbnail()
+        translationPair = nil
+        showsTranslation = false
         guard let cg = rep.cgImage else { return }
         let w = cg.width, h = cg.height
         let rotates = t == .rotateLeft || t == .rotateRight
@@ -671,6 +729,9 @@ final class PinWindow: NSPanel {
         menu.addItem(item("标注…", #selector(annotate), " "))
         menu.items.last?.keyEquivalentModifierMask = []
         menu.addItem(item("识别文字", #selector(recognizeText)))
+        let translateItem = item(translationPair == nil ? "翻译" : (showsTranslation ? "显示原文" : "显示译文"), #selector(toggleTranslation), "y")
+        translateItem.keyEquivalentModifierMask = []
+        menu.addItem(translateItem)
         menu.addItem(item("分享…", #selector(share)))
         menu.addItem(item("打印…", #selector(printImage), "p"))
         menu.addItem(.separator())
