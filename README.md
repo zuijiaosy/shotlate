@@ -121,6 +121,8 @@ scripts/test.sh           # 运行单元测试
 | `snap://capture?area=window&file=~/Desktop/w.png&delay=2` | 2 秒后截取当前窗口并保存到指定文件 |
 | `snap://pin` · `snap://toggle-pins` · `snap://whiteboard?transparent=1` · `snap://scan` · `snap://history` | 剪贴板贴图 · 隐藏/显示贴图 · 透明白板 · 扫码 · 回放上一次截图 |
 
+**快捷键命令**：设置 → 快捷键命令 里可以给任意命令绑定全局快捷键，内置常用预设（截取全屏并复制、截取上次区域、截取当前窗口、截图后直接贴图、延时截图、白板、回放、下一个贴图分组等），也可以自己写 `snap://` 链接或下面的命令行。「忽略这些应用」里的应用（填应用名、Bundle ID 或路径片段）在前台时，Snap 的所有快捷键暂时失效，按键原样交给它们，适合游戏和远程桌面。
+
 命令行兼容 Snipaste 的常用写法，会转发给正在运行的 Snap（加 `--dry-run` 只打印对应的链接）：
 
 ```bash

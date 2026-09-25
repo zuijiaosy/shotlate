@@ -4,12 +4,12 @@ import ServiceManagement
 import SnapCore
 import SwiftUI
 
-enum ShortcutTarget { case capture, pinClipboard, togglePins, scanCode }
+enum ShortcutTarget: Equatable { case capture, pinClipboard, togglePins, scanCode, custom(UUID) }
 
 final class SettingsModel: ObservableObject {
     @Published var baseURL = Settings.shared.baseURL
     @Published var model = Settings.shared.model
-    @Published var apiKey = Settings.shared.apiKey
+    @Published var apiKey = ""
     @Published var targetLanguage = Settings.shared.targetLanguage
     @Published var saveDirectory = Settings.shared.saveDirectory
     @Published var imageFormat = Settings.shared.imageFormat
@@ -17,6 +17,8 @@ final class SettingsModel: ObservableObject {
     @Published var pinShortcut = Settings.shared.pinClipboardShortcut
     @Published var togglePinsShortcut = Settings.shared.togglePinsShortcut
     @Published var scanCodeShortcut = Settings.shared.scanCodeShortcut
+    @Published var customCommands = Settings.shared.customCommands
+    @Published var ignoredAppsText = Settings.shared.ignoredApps.joined(separator: ", ")
     @Published var recording: ShortcutTarget?
     @Published var playSound = Settings.shared.playSound
     @Published var copyAsFile = Settings.shared.copyAsFile
@@ -41,6 +43,11 @@ final class SettingsModel: ObservableObject {
 
     static let languages = ["简体中文", "繁體中文", "English", "日本語", "한국어"]
 
+    /// `loadSecrets` false skips the Keychain, which would prompt when read from an unsigned build (the self-checks).
+    init(loadSecrets: Bool = true) {
+        if loadSecrets { apiKey = Settings.shared.apiKey }
+    }
+
     var config: TranslationConfig {
         TranslationConfig(baseURL: baseURL, model: model, apiKey: apiKey, targetLanguage: targetLanguage)
     }
@@ -57,6 +64,8 @@ final class SettingsModel: ObservableObject {
         s.pinClipboardShortcut = pinShortcut
         s.togglePinsShortcut = togglePinsShortcut
         s.scanCodeShortcut = scanCodeShortcut
+        s.customCommands = customCommands.filter { !$0.command.trimmingCharacters(in: .whitespaces).isEmpty }
+        s.ignoredApps = ignoredAppsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         s.playSound = playSound
         s.copyAsFile = copyAsFile
         s.captureCursor = captureCursor
@@ -138,6 +147,8 @@ final class SettingsModel: ObservableObject {
                 case .pinClipboard: self.pinShortcut = shortcut
                 case .togglePins: self.togglePinsShortcut = shortcut
                 case .scanCode: self.scanCodeShortcut = shortcut
+                case let .custom(id):
+                    if let i = self.customCommands.firstIndex(where: { $0.id == id }) { self.customCommands[i].shortcut = shortcut }
                 case nil: break
                 }
                 self.stopRecordingShortcut()
@@ -228,6 +239,43 @@ struct SettingsView: View {
             }
 
             Section {
+                ForEach($model.customCommands) { $command in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            TextField("名称", text: $command.name).frame(width: 130)
+                            Button(model.recording == .custom(command.id) ? "请按组合键…" : command.shortcut?.displayString ?? "设置快捷键") {
+                                model.recording == .custom(command.id) ? model.stopRecordingShortcut() : model.startRecording(.custom(command.id))
+                            }
+                            Spacer()
+                            Button(role: .destructive) {
+                                model.customCommands.removeAll { $0.id == command.id }
+                            } label: { Image(systemName: "minus.circle") }
+                            .buttonStyle(.borderless)
+                        }
+                        TextField("命令", text: $command.command, prompt: Text("snip --full -o clipboard 或 snap://…"))
+                            .font(.system(.body, design: .monospaced))
+                        if Automation.parse(command: command.command) == nil {
+                            Text("无法识别的命令").font(.caption).foregroundStyle(.red)
+                        }
+                    }
+                }
+                Menu("添加命令") {
+                    ForEach(CustomCommand.presets, id: \.command) { preset in
+                        Button(preset.name) { model.customCommands.append(CustomCommand(name: preset.name, command: preset.command)) }
+                    }
+                    Divider()
+                    Button("自定义…") { model.customCommands.append(CustomCommand(name: "新命令", command: "")) }
+                }
+                TextField("忽略这些应用", text: $model.ignoredAppsText, prompt: Text("例如：Steam, com.microsoft.rdc.macos"))
+            } header: {
+                Text("快捷键命令")
+            } footer: {
+                Text("命令可以是 snap:// 链接，或 Snipaste 风格的命令行（snip、paste、toggle-images、whiteboard、barcode-scan、switch-group），见 README「自动化」。「忽略这些应用」填应用名、Bundle ID 或路径片段，用逗号分隔；这些应用在前台时 Snap 的所有快捷键暂时失效，按键直接交给它们。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 Stepper(value: $model.historyLimit, in: 0...200, step: 5) {
                     Text(model.historyLimit == 0 ? "截图历史：关闭" : "截图历史：保留最近 \(model.historyLimit) 张")
                 }
@@ -293,8 +341,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // The form scrolls; the window is capped so it fits on a laptop screen.
         .frame(width: 480)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(minHeight: 420, idealHeight: 720)
     }
 }
 
@@ -303,8 +352,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var model = SettingsModel()
 
     private init() {
-        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 480, height: 520),
-                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 480, height: 720),
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.contentMinSize = CGSize(width: 480, height: 420)
+        window.contentMaxSize = CGSize(width: 480, height: 4000)
         window.title = "Snap 设置"
         window.isReleasedWhenClosed = false
         super.init(window: window)
@@ -316,7 +367,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     func present() {
         // Reload so the window reflects what is stored, not a stale unsaved draft.
         model = SettingsModel()
-        window?.contentViewController = NSHostingController(rootView: SettingsView(model: model))
+        let controller = NSHostingController(rootView: SettingsView(model: model))
+        controller.sizingOptions = []
+        window?.contentViewController = controller
+        if let screen = NSScreen.main {
+            window?.setContentSize(CGSize(width: 480, height: min(720, screen.visibleFrame.height - 80)))
+        }
         window?.center()
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)

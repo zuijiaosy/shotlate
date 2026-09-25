@@ -9,6 +9,7 @@ public enum AutomationCommand: Equatable {
     case whiteboard(transparent: Bool)
     case scanCode
     case replayHistory
+    case nextPinGroup
 }
 
 public struct CaptureRequest: Equatable {
@@ -83,8 +84,43 @@ public enum Automation {
         case "transparent-whiteboard": return .whiteboard(transparent: true)
         case "scan", "barcode-scan": return .scanCode
         case "history", "replay": return .replayHistory
+        case "next-group", "switch-group": return .nextPinGroup
         default: return nil
         }
+    }
+
+    /// A command typed in settings: a `snap://` link or a command line like `snip --full -o "pin;quick-save"`.
+    public static func parse(command text: String) -> AutomationCommand? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("\(scheme)://") {
+            return URL(string: trimmed).flatMap(parse)
+        }
+        return parse(arguments: splitArguments(trimmed))
+    }
+
+    /// Splits on spaces, keeping "quoted parts" and 'quoted parts' together.
+    public static func splitArguments(_ text: String) -> [String] {
+        var args: [String] = []
+        var current = ""
+        var quote: Character?
+        var hasToken = false
+        for ch in text {
+            if let q = quote {
+                if ch == q { quote = nil } else { current.append(ch) }
+            } else if ch == "\"" || ch == "'" {
+                quote = ch
+                hasToken = true
+            } else if ch == " " || ch == "\t" {
+                if hasToken { args.append(current) }
+                current = ""
+                hasToken = false
+            } else {
+                current.append(ch)
+                hasToken = true
+            }
+        }
+        if hasToken { args.append(current) }
+        return args
     }
 
     static func parseArea(_ text: String) -> CaptureRequest.Area? {
@@ -134,6 +170,7 @@ public enum Automation {
             if transparent { c.queryItems = [URLQueryItem(name: "transparent", value: "1")] }
         case .scanCode: c.host = "scan"
         case .replayHistory: c.host = "history"
+        case .nextPinGroup: c.host = "next-group"
         }
         return c.url!
     }
@@ -188,6 +225,7 @@ public enum Automation {
         case "whiteboard": return .whiteboard(transparent: rest.contains("--transparent"))
         case "transparent-whiteboard": return .whiteboard(transparent: true)
         case "barcode-scan": return .scanCode
+        case "switch-group": return .nextPinGroup
         default: return nil
         }
     }

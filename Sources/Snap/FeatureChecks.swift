@@ -1,4 +1,7 @@
 import AppKit
+import SwiftUI
+import Carbon.HIToolbox
+import SwiftUI
 import CoreImage
 import SnapCore
 
@@ -40,6 +43,7 @@ enum FeatureChecks {
         ("elements", elements),
         ("pin-annotate", pinAnnotate),
         ("automation", automation),
+        ("hotkeys", hotkeys),
     ]
 
     @MainActor
@@ -1035,5 +1039,49 @@ enum FeatureChecks {
         expect(session.isFinished && PinManager.shared.pins.last?.frame.size == CGSize(width: 160, height: 100),
                "snip -o pin pins the selection as soon as it is made")
         PinManager.shared.closeAll()
+    }
+
+    @MainActor static func hotkeys() async {
+        let center = HotKeyCenter.shared
+        center.unregisterAll()
+        // Unusual combinations so they are free: ⌃⌥⇧⌘ + F13 / F14.
+        let a = Shortcut(keyCode: 105, carbonModifiers: UInt32(controlKey | optionKey | shiftKey | cmdKey), keyLabel: "F13")
+        let b = Shortcut(keyCode: 107, carbonModifiers: UInt32(controlKey | optionKey | shiftKey | cmdKey), keyLabel: "F14")
+        var fired: [String] = []
+        let okA = center.register(id: HotKeyCenter.customBase, shortcut: a) { fired.append("a") }
+        let okB = center.register(id: HotKeyCenter.customBase + 1, shortcut: b) { fired.append("b") }
+        expect(okA && okB && center.registeredCount == 2, "two custom commands register with the system")
+        center.setSuspended(true)
+        expect(center.registeredCount == 0, "an ignored app in front releases every hotkey")
+        center.setSuspended(false)
+        expect(center.registeredCount == 2, "and they come back when it leaves")
+        center.testing_fire(HotKeyCenter.customBase + 1)
+        expect(fired == ["b"], "each id runs its own command")
+        center.unregisterCustom()
+        expect(center.registeredCount == 0, "custom commands can be cleared without touching built-ins")
+
+        expect(IgnoredApps.matches(name: "Steam", bundleID: "com.valvesoftware.steam", path: "/Applications/Steam.app", patterns: ["steam"]),
+               "matches an app by name, case-insensitively")
+        expect(IgnoredApps.matches(name: "Game", bundleID: "x.y", path: "/Users/me/Games/Foo.app", patterns: ["games/"]),
+               "matches a path fragment")
+        expect(!IgnoredApps.matches(name: "Safari", bundleID: "com.apple.Safari", path: "/Applications/Safari.app", patterns: ["steam", " "]),
+               "leaves other apps alone")
+        expect(CustomCommand.presets.allSatisfy { Automation.parse(command: $0.command) != nil }, "every preset command parses")
+
+        // The settings window with a couple of commands, rendered offscreen for a look (without touching the Keychain).
+        let model = SettingsModel(loadSecrets: false)
+        model.customCommands = [CustomCommand(name: "截取全屏并复制", command: "snip --full -o clipboard", shortcut: a),
+                                CustomCommand(name: "新命令", command: "oops")]
+        model.ignoredAppsText = "Steam, com.microsoft.rdc.macos"
+        let hosting = NSHostingView(rootView: SettingsView(model: model))
+        hosting.frame = CGRect(x: 0, y: 0, width: 480, height: 1900)
+        let window = NSWindow(contentRect: CGRect(x: -8000, y: -8000, width: 480, height: 1900), styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = hosting
+        hosting.layoutSubtreeIfNeeded()
+        if let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) {
+            hosting.cacheDisplay(in: hosting.bounds, to: rep)
+            write(rep, "settings.png")
+        }
+
     }
 }

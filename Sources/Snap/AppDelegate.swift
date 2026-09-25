@@ -69,6 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         center.addObserver(forName: Settings.didChange, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
         center.addObserver(forName: .snapPauseHotKey, object: nil, queue: .main) { _ in HotKeyCenter.shared.unregisterAll() }
         center.addObserver(forName: .snapResumeHotKey, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            HotKeyCenter.shared.setSuspended(app.map { IgnoredApps.matches($0, patterns: Settings.shared.ignoredApps) } ?? false)
+        }
 
         TextRecognizer.warmUp()
         if Settings.shared.restorePins { PinStore.shared.restore() }
@@ -120,10 +124,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let toggle = settings.togglePinsShortcut
         let toggleOK = HotKeyCenter.shared.register(.togglePins, shortcut: toggle) { PinManager.shared.toggleHidden() }
         registerScanHotKey()
+        registerCustomHotKeys()
         togglePinsShortcutLabel = toggle.map { toggleOK ? "（\($0.displayString)）" : "（快捷键 \($0.displayString) 已被占用）" } ?? ""
     }
 
     private var togglePinsShortcutLabel = ""
+
+    /// User commands from settings, each on its own id.
+    private func registerCustomHotKeys() {
+        HotKeyCenter.shared.unregisterCustom()
+        for (i, command) in Settings.shared.customCommands.enumerated() {
+            guard let shortcut = command.shortcut else { continue }
+            let text = command.command
+            HotKeyCenter.shared.register(id: HotKeyCenter.customBase + UInt32(i), shortcut: shortcut) {
+                guard let parsed = Automation.parse(command: text) else { return HUD.show("无法识别的命令：\(text)") }
+                AutomationRunner.run(parsed)
+            }
+        }
+    }
 
     private func registerScanHotKey() {
         let scan = Settings.shared.scanCodeShortcut

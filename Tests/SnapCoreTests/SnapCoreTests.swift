@@ -501,7 +501,7 @@ import Testing
             .capture(CaptureRequest(area: .rect(CGRect(x: 1.5, y: 2, width: 30, height: 40)), outputs: [.clipboard, .file("/tmp/a b.png")], delay: 3)),
             .capture(CaptureRequest(area: .last, outputs: [.pin])),
             .capture(CaptureRequest(area: .interactive, outputs: [])),
-            .whiteboard(transparent: true), .togglePins, .scanCode, .pinClipboard, .replayHistory,
+            .whiteboard(transparent: true), .togglePins, .scanCode, .pinClipboard, .replayHistory, .nextPinGroup,
         ]
         for command in commands {
             #expect(Automation.parse(Automation.url(for: command)) == command)
@@ -511,5 +511,22 @@ import Testing
     @Test func fixedAreasDefaultToClipboard() {
         #expect(CaptureRequest(area: .fullScreen, outputs: []).effectiveOutputs == [.clipboard])
         #expect(CaptureRequest(area: .interactive, outputs: []).effectiveOutputs.isEmpty)
+    }
+}
+
+@Suite struct CommandTextTests {
+    @Test func splitsWithQuotes() {
+        #expect(Automation.splitArguments(#"snip --area 0 0 10 10 -o "pin;~/My Shots/a.png""#)
+            == ["snip", "--area", "0", "0", "10", "10", "-o", "pin;~/My Shots/a.png"])
+        #expect(Automation.splitArguments("  paste  ") == ["paste"])
+        #expect(Automation.splitArguments(#"a '' b"#) == ["a", "", "b"])
+    }
+
+    @Test func parsesTypedCommands() {
+        #expect(Automation.parse(command: "snip --full -o clipboard") == .capture(CaptureRequest(area: .fullScreen, outputs: [.clipboard])))
+        #expect(Automation.parse(command: " snap://toggle-pins ") == .togglePins)
+        #expect(Automation.parse(command: "switch-group") == .nextPinGroup)
+        #expect(Automation.parse(command: "rm -rf /") == nil)
+        #expect(Automation.parse(command: "") == nil)
     }
 }

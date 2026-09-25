@@ -17,6 +17,7 @@ enum AutomationRunner {
         case let .whiteboard(transparent): CaptureSession.beginBoard(transparent: transparent)
         case .scanCode: CodeScanner.scanScreens()
         case .replayHistory: CaptureSession.begin(replay: true)
+        case .nextPinGroup: PinManager.shared.switchToNextGroup()
         }
     }
 

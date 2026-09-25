@@ -64,6 +64,26 @@ enum ImageFormat: String, CaseIterable, Identifiable {
     var fileExtension: String { self == .png ? "png" : "jpg" }
 }
 
+/// A user-defined global shortcut that runs a snap:// link or a Snipaste-style command.
+struct CustomCommand: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var name: String
+    var command: String
+    var shortcut: Shortcut?
+
+    static let presets: [CustomCommand] = [
+        CustomCommand(name: "截取全屏并复制", command: "snip --full -o clipboard"),
+        CustomCommand(name: "截取上次区域并复制", command: "snip --last -o clipboard"),
+        CustomCommand(name: "截取当前窗口并复制", command: "snip --active-window -o clipboard"),
+        CustomCommand(name: "截图后直接贴图", command: "snip -o pin"),
+        CustomCommand(name: "3 秒后截图", command: "snip --delay 3"),
+        CustomCommand(name: "白板", command: "whiteboard"),
+        CustomCommand(name: "透明白板", command: "transparent-whiteboard"),
+        CustomCommand(name: "回放上一次截图", command: "snap://history"),
+        CustomCommand(name: "下一个贴图分组", command: "switch-group"),
+    ]
+}
+
 /// App settings. Everything lives in UserDefaults except the API key, which goes to the Keychain.
 final class Settings {
     static let shared = Settings()
@@ -141,6 +161,17 @@ final class Settings {
             return try? JSONDecoder().decode(Shortcut.self, from: data)
         }
         set { setOptionalShortcut(newValue, "scan.shortcut") }
+    }
+
+    var customCommands: [CustomCommand] {
+        get { defaults.data(forKey: "hotkeys.custom").flatMap { try? JSONDecoder().decode([CustomCommand].self, from: $0) } ?? [] }
+        set { defaults.set(try? JSONEncoder().encode(newValue), forKey: "hotkeys.custom") }
+    }
+
+    /// App names, bundle ids or path fragments; while such an app is in front, Snap's hotkeys are released.
+    var ignoredApps: [String] {
+        get { defaults.stringArray(forKey: "hotkeys.ignoredApps") ?? [] }
+        set { defaults.set(newValue, forKey: "hotkeys.ignoredApps") }
     }
 
     /// A missing key means "never set", which gets the default; empty data means the user cleared it.
