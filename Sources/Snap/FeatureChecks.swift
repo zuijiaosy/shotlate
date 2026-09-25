@@ -17,6 +17,7 @@ enum FeatureChecks {
         ("pins-hide", pinsHide),
         ("pin-keys", pinKeys),
         ("pin-clipboard", pinClipboard),
+        ("countdown", countdown),
     ]
 
     @MainActor
@@ -150,5 +151,25 @@ enum FeatureChecks {
         let empty = pinned { }
         expect(empty.isEmpty, "empty clipboard pins nothing")
         manager.closeAll()
+    }
+
+    @MainActor static func countdown() async {
+        let countdown = Countdown()
+        var ticks: [Int] = []
+        var fired = false
+        let started = Date()
+        countdown.start(seconds: 2, tick: { ticks.append($0) }, fire: { fired = true })
+        expect(countdown.isRunning && ticks == [2], "starts at the full count")
+        while !fired, Date().timeIntervalSince(started) < 4 { try? await Task.sleep(for: .milliseconds(50)) }
+        let elapsed = Date().timeIntervalSince(started)
+        expect(fired && ticks == [2, 1], "ticks down and fires (ticks \(ticks))")
+        expect(elapsed > 1.8 && elapsed < 2.6, "fires after about 2 s (\(String(format: "%.2f", elapsed)) s)")
+        expect(!countdown.isRunning, "stops after firing")
+
+        fired = false
+        countdown.start(seconds: 1, tick: { _ in }, fire: { fired = true })
+        countdown.cancel()
+        try? await Task.sleep(for: .milliseconds(1300))
+        expect(!fired, "cancel prevents firing")
     }
 }

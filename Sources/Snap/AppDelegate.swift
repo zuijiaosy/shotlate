@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var closePinsItem: NSMenuItem!
     private var togglePinsItem: NSMenuItem!
     private var passthroughItem: NSMenuItem!
+    private var cancelDelayItem: NSMenuItem!
+    private let countdown = Countdown()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
@@ -21,6 +23,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         captureItem = item("截图", #selector(capture))
         menu.addItem(captureItem)
+        let delayItem = NSMenuItem(title: "延时截图", action: nil, keyEquivalent: "")
+        let delayMenu = NSMenu()
+        for seconds in [3, 5, 10] {
+            let i = item("\(seconds) 秒后", #selector(delayedCapture(_:)))
+            i.tag = seconds
+            delayMenu.addItem(i)
+        }
+        delayItem.submenu = delayMenu
+        menu.addItem(delayItem)
+        cancelDelayItem = item("取消延时截图", #selector(cancelDelayedCapture))
+        menu.addItem(cancelDelayItem)
         menu.addItem(.separator())
         pinClipboardItem = item("从剪贴板贴图", #selector(pinClipboard))
         menu.addItem(pinClipboardItem)
@@ -85,11 +98,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         togglePinsItem.isEnabled = pins.hasPins
         togglePinsItem.title = (pins.isHidingAll ? "显示全部贴图" : "隐藏全部贴图") + togglePinsShortcutLabel
         passthroughItem.isHidden = !pins.hasPassthrough
+        cancelDelayItem.isHidden = !countdown.isRunning
     }
 
     @objc private func capture() {
         // Let the menu close before the screen is frozen.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { CaptureSession.begin() }
+    }
+
+    /// Counts down on the menu bar icon, so menus and hover states can be opened before the screen freezes.
+    @objc private func delayedCapture(_ sender: NSMenuItem) {
+        startDelayedCapture(seconds: sender.tag)
+    }
+
+    func startDelayedCapture(seconds: Int) {
+        let button = statusItem.button
+        countdown.start(seconds: seconds, tick: { remaining in
+            button?.imagePosition = .imageLeading
+            button?.title = " \(remaining)"
+            self.statusItem.length = NSStatusItem.variableLength
+        }, fire: { [weak self] in
+            self?.resetStatusButton()
+            CaptureSession.begin()
+        })
+    }
+
+    @objc private func cancelDelayedCapture() {
+        countdown.cancel()
+        resetStatusButton()
+    }
+
+    private func resetStatusButton() {
+        statusItem.button?.title = ""
+        statusItem.button?.imagePosition = .imageOnly
+        statusItem.length = NSStatusItem.squareLength
     }
 
     @objc private func pinClipboard() { PinManager.shared.pinClipboard() }
