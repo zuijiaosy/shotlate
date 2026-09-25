@@ -25,6 +25,18 @@ enum StyleMemory {
         defaults.set(all, forKey: "style.colors")
     }
 
+    static func style(for tool: Tool) -> ItemStyle {
+        guard let data = defaults.data(forKey: "style.options"),
+              let all = try? JSONDecoder().decode([String: ItemStyle].self, from: data) else { return ItemStyle() }
+        return all[tool.rawValue] ?? ItemStyle()
+    }
+
+    static func setStyle(_ style: ItemStyle, for tool: Tool) {
+        var all = (defaults.data(forKey: "style.options")).flatMap { try? JSONDecoder().decode([String: ItemStyle].self, from: $0) } ?? [:]
+        all[tool.rawValue] = style
+        defaults.set(try? JSONEncoder().encode(all), forKey: "style.options")
+    }
+
     static var sizes: [Tool: CGFloat] {
         get {
             let raw = defaults.dictionary(forKey: "style.sizes") as? [String: Double] ?? [:]
@@ -110,6 +122,7 @@ final class CaptureView: NSView {
     private var editingID: UUID?
     private var editingColor = StyleMemory.color(for: .text)
     private var editingSize = StyleMemory.size(for: .text)
+    private var editingStyle = StyleMemory.style(for: .text)
 
     private var cornerRadius = CGFloat(Settings.shared.cornerRadius)
     private var shadowEnabled = Settings.shared.shadowEnabled
@@ -867,17 +880,18 @@ final class CaptureView: NSView {
     private func beginAnnotation(_ tool: Tool, at p: CGPoint) {
         let color = StyleMemory.color(for: tool)
         let size = StyleMemory.size(for: tool)
+        let style = StyleMemory.style(for: tool)
         switch tool {
         case .text:
             beginTextEditing(at: p)
         case .number:
-            let item = AnnotationItem(shape: .number(p), color: color, size: size)
+            let item = AnnotationItem(shape: .number(p), color: color, size: size, style: style)
             mutate { items.append(item) }
             selectedID = item.id
             invalidate(item.bounds, margin: 16)
             layoutChrome()
         case .pen:
-            draft = AnnotationItem(shape: .pen([p]), color: color, size: size)
+            draft = AnnotationItem(shape: .pen([p]), color: color, size: size, style: style)
             drag = .drawing(p)
         case .highlighter:
             draft = AnnotationItem(shape: .highlighter([p]), color: color, size: size)
@@ -900,7 +914,7 @@ final class CaptureView: NSView {
             case .line: shape = .line(p, p)
             default: shape = .arrow(p, p)
             }
-            draft = AnnotationItem(shape: shape, color: color, size: size)
+            draft = AnnotationItem(shape: shape, color: color, size: size, style: style)
             drag = .drawing(p)
         }
     }
@@ -969,7 +983,8 @@ final class CaptureView: NSView {
         let old = draft?.bounds ?? .null
         let end = polylineEnd(from: points.last, to: cursor, shift: NSEvent.modifierFlags.contains(.shift))
         draft = AnnotationItem(shape: .polyline(points + [end], arrow: tool == .arrow),
-                               color: StyleMemory.color(for: tool ?? .line), size: StyleMemory.size(for: tool ?? .line))
+                               color: StyleMemory.color(for: tool ?? .line), size: StyleMemory.size(for: tool ?? .line),
+                               style: StyleMemory.style(for: tool ?? .line))
         invalidate(old, draft?.bounds ?? .null, margin: 4 + (draft?.size ?? 0))
     }
 
@@ -996,7 +1011,7 @@ final class CaptureView: NSView {
         let old = draft?.bounds ?? .null
         draft = nil
         let item = AnnotationItem(shape: .polyline(points, arrow: tool == .arrow), color: StyleMemory.color(for: tool ?? .line),
-                                  size: StyleMemory.size(for: tool ?? .line))
+                                  size: StyleMemory.size(for: tool ?? .line), style: StyleMemory.style(for: tool ?? .line))
         if item.isMeaningful {
             mutate { items.append(item) }
             selectedID = item.id
@@ -1027,11 +1042,13 @@ final class CaptureView: NSView {
             text = t
             editingColor = existing.color
             editingSize = existing.size
+            editingStyle = existing.style
             editingID = existing.id
             selectedID = nil
         } else {
             editingColor = StyleMemory.color(for: .text)
             editingSize = StyleMemory.size(for: .text)
+            editingStyle = StyleMemory.style(for: .text)
             origin.y -= editingSize * 0.6
         }
         let wrap = max(60, selection.maxX - origin.x - 6)
@@ -1060,10 +1077,11 @@ final class CaptureView: NSView {
                 items[i].shape = shape
                 items[i].color = editingColor
                 items[i].size = editingSize
+                items[i].style = editingStyle
                 selectedID = id
             }
         } else if !text.isEmpty {
-            let item = AnnotationItem(shape: shape, color: editingColor, size: editingSize)
+            let item = AnnotationItem(shape: shape, color: editingColor, size: editingSize, style: editingStyle)
             items.append(item)
             selectedID = item.id
         }
@@ -1082,15 +1100,16 @@ final class CaptureView: NSView {
     private var currentStyle: StyleState? {
         if textEditor != nil {
             return StyleState(tool: .text, color: editingColor, size: editingSize,
-                              mosaicMode: StyleMemory.mosaicMode, mosaicEffect: StyleMemory.mosaicEffect)
+                              mosaicMode: StyleMemory.mosaicMode, mosaicEffect: StyleMemory.mosaicEffect, options: editingStyle)
         }
         if let item = item(selectedID) {
             return StyleState(tool: item.tool, color: item.color, size: item.size,
-                              mosaicMode: item.shape.isMosaicBrush ? .brush : .rect, mosaicEffect: item.effect)
+                              mosaicMode: item.shape.isMosaicBrush ? .brush : .rect, mosaicEffect: item.effect, options: item.style)
         }
         guard let tool else { return nil }
         return StyleState(tool: tool, color: StyleMemory.color(for: tool), size: StyleMemory.size(for: tool),
-                          mosaicMode: StyleMemory.areaMode(for: tool), mosaicEffect: StyleMemory.areaEffect(for: tool))
+                          mosaicMode: StyleMemory.areaMode(for: tool), mosaicEffect: StyleMemory.areaEffect(for: tool),
+                          options: StyleMemory.style(for: tool))
     }
 
     private func applyStyle(_ action: StyleAction) {
@@ -1128,12 +1147,20 @@ final class CaptureView: NSView {
         case let .mosaicMode(m):
             if styleTool == .eraser { StyleMemory.eraserMode = m } else { StyleMemory.mosaicMode = m }
         case let .mosaicEffect(e): StyleMemory.mosaicEffect = e
+        case .options: break
         case .customColor: break
+        }
+        var newOptions: ItemStyle?
+        if case let .options(change) = action, var options = currentStyle?.options {
+            change(&options)
+            newOptions = options
+            StyleMemory.setStyle(options, for: styleTool)
         }
 
         if let editor = textEditor {
             if let clampedSize { editingSize = clampedSize }
             if case let .color(c) = action { editingColor = c }
+            if let newOptions { editingStyle = newOptions }
             editor.apply(color: editingColor, size: editingSize)
         } else if let index = selectedIndex {
             let change = {
@@ -1141,6 +1168,7 @@ final class CaptureView: NSView {
                 if let clampedSize { item.size = clampedSize }
                 if case let .color(c) = action { item.color = c }
                 if case let .mosaicEffect(e) = action { item.effect = e }
+                if let newOptions { item.style = newOptions }
                 self.replaceItem(item)
             }
             if coalesce { coalescedChange(change) } else { mutate(change) }

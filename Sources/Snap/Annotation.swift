@@ -80,6 +80,23 @@ enum Tool: String, CaseIterable {
 }
 
 enum MosaicMode: String { case brush, rect }
+
+/// Stroke pattern for outlined shapes, lines, arrows and the pen.
+enum DashStyle: String, Codable, CaseIterable { case solid, dashed, dotted }
+
+/// Arrow look: the tapered filled arrow, a plain line with an open head, or heads at both ends.
+enum ArrowHead: String, Codable, CaseIterable { case tapered, open, double }
+
+/// How text stands out from what is under it.
+enum TextDecoration: String, Codable, CaseIterable { case plain, background, outline }
+
+/// The optional looks an annotation can have beyond color and size.
+struct ItemStyle: Equatable, Codable {
+    var dash: DashStyle = .solid
+    var arrowHead: ArrowHead = .tapered
+    var rounded = false
+    var text: TextDecoration = .plain
+}
 enum MosaicEffect: String, Codable {
     case pixelate, blur
     /// The untouched screenshot: this is how the eraser removes annotations under it.
@@ -109,6 +126,7 @@ struct AnnotationItem: Equatable {
     var color: NSColor
     var size: CGFloat
     var effect: MosaicEffect = .pixelate
+    var style = ItemStyle()
 
     var tool: Tool {
         switch shape {
@@ -222,7 +240,8 @@ extension AnnotationItem {
         case let .pen(points), let .highlighter(points), let .mosaicBrush(points):
             return points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -pad, dy: -pad)
         case let .text(text, origin, width):
-            return CGRect(origin: origin, size: Self.textSize(text, size: size, width: width))
+            let r = CGRect(origin: origin, size: Self.textSize(text, size: size, width: width))
+            return style.text == .background ? r.insetBy(dx: -Self.textPadding(size), dy: -Self.textPadding(size) / 2) : r
         case let .number(center):
             return CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
         }
@@ -321,6 +340,9 @@ extension AnnotationItem {
         case .number: return true
         }
     }
+
+    static func textPadding(_ size: CGFloat) -> CGFloat { max(4, size * 0.35) }
+    static func cornerRadius(for r: CGRect, size: CGFloat) -> CGFloat { min(8 + size * 2, min(r.width, r.height) / 2) }
 
     static func arrowHeadWidth(_ size: CGFloat) -> CGFloat { size * 3 + 10 }
     static func arrowHeadLength(_ size: CGFloat) -> CGFloat { size * 3 + 12 }
@@ -425,34 +447,39 @@ struct ContentRenderer {
         cg.setLineWidth(item.size)
         cg.setLineCap(.round)
         cg.setLineJoin(.round)
+        Self.applyDash(item.style.dash, size: item.size, to: cg)
 
         switch item.shape {
         case let .rectangle(r):
-            cg.setLineJoin(.miter)
-            cg.stroke(r)
+            if item.style.rounded {
+                let radius = AnnotationItem.cornerRadius(for: r, size: item.size)
+                cg.addPath(CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil))
+                cg.strokePath()
+            } else {
+                cg.setLineJoin(.miter)
+                cg.stroke(r)
+            }
         case let .ellipse(r):
             cg.strokeEllipse(in: r)
         case let .line(a, b):
             cg.strokeLineSegments(between: [a, b])
         case let .arrow(a, b):
-            if let path = Self.arrowPath(from: a, to: b, size: item.size) {
-                cg.addPath(path)
-                cg.fillPath()
+            if item.style.arrowHead == .tapered, item.style.dash == .solid {
+                if let path = Self.arrowPath(from: a, to: b, size: item.size) {
+                    cg.addPath(path)
+                    cg.fillPath()
+                }
+            } else {
+                Self.drawArrow([a, b], head: item.style.arrowHead, size: item.size, in: cg)
             }
         case let .polyline(points, arrow):
             guard points.count >= 2 else { break }
-            var shaft = points
-            if arrow, let tip = points.last, let tail = points.dropLast().last(where: { hypot($0.x - tip.x, $0.y - tip.y) > 1 }) {
-                // End the stroke where the head starts, so the round cap doesn't poke out of the tip.
-                let length = hypot(tip.x - tail.x, tip.y - tail.y)
-                let head = min(AnnotationItem.arrowHeadLength(item.size), length * 0.6)
-                shaft[shaft.count - 1] = CGPoint(x: tip.x - (tip.x - tail.x) / length * head * 0.8,
-                                                 y: tip.y - (tip.y - tail.y) / length * head * 0.8)
-                cg.addPath(Self.arrowHeadPath(from: tail, to: tip, size: item.size))
-                cg.fillPath()
+            if arrow {
+                Self.drawArrow(points, head: item.style.arrowHead, size: item.size, in: cg)
+            } else {
+                cg.addLines(between: points)
+                cg.strokePath()
             }
-            cg.addLines(between: shaft)
-            cg.strokePath()
         case let .pen(points):
             cg.addPath(Self.smoothPath(points))
             cg.strokePath()
@@ -472,7 +499,22 @@ struct ContentRenderer {
             cg.clip()
             effect(item.effect).draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
         case let .text(text, origin, width):
-            NSAttributedString(string: text, attributes: AnnotationItem.textAttributes(color: item.color, size: item.size))
+            var attributes = AnnotationItem.textAttributes(color: item.color, size: item.size)
+            switch item.style.text {
+            case .plain:
+                break
+            case .background:
+                // A pill in the chosen color, with black or white text on it.
+                let box = item.bounds
+                cg.addPath(CGPath(roundedRect: box, cornerWidth: min(6, box.height / 2), cornerHeight: min(6, box.height / 2), transform: nil))
+                cg.fillPath()
+                attributes[.foregroundColor] = Self.contrastingTextColor(for: item.color)
+            case .outline:
+                // Negative stroke width strokes and fills, so the letters keep their color with a contrasting edge.
+                attributes[.strokeColor] = Self.contrastingTextColor(for: item.color)
+                attributes[.strokeWidth] = -max(2.5, 30 / item.size)
+            }
+            NSAttributedString(string: text, attributes: attributes)
                 .draw(with: CGRect(x: origin.x, y: origin.y, width: width, height: 100_000), options: [.usesLineFragmentOrigin])
         case let .number(c):
             let d = item.size
@@ -513,6 +555,56 @@ struct ContentRenderer {
         }
         path.addLine(to: points[points.count - 1])
         return path
+    }
+
+    static func applyDash(_ dash: DashStyle, size: CGFloat, to cg: CGContext) {
+        switch dash {
+        case .solid: break
+        case .dashed: cg.setLineDash(phase: 0, lengths: [max(4, size * 3), max(3, size * 2)])
+        case .dotted:
+            // Zero-length dashes with round caps are dots.
+            cg.setLineCap(.round)
+            cg.setLineDash(phase: 0, lengths: [0.01, max(3, size * 2)])
+        }
+    }
+
+    /// A stroked shaft through `points` with filled heads: at the end, or at both ends for `.double`,
+    /// or open V heads for `.open`.
+    static func drawArrow(_ points: [CGPoint], head: ArrowHead, size: CGFloat, in cg: CGContext) {
+        guard let tip = points.last, let beforeTip = points.dropLast().last(where: { hypot($0.x - tip.x, $0.y - tip.y) > 1 }) else { return }
+        var shaft = points
+        func trim(_ end: CGPoint, from previous: CGPoint) -> CGPoint {
+            // Stop the stroke inside the head, so the round cap doesn't poke out of the tip.
+            let length = hypot(end.x - previous.x, end.y - previous.y)
+            let head = min(AnnotationItem.arrowHeadLength(size), length * 0.6) * 0.8
+            return CGPoint(x: end.x - (end.x - previous.x) / length * head, y: end.y - (end.y - previous.y) / length * head)
+        }
+        if head != .open { shaft[shaft.count - 1] = trim(tip, from: beforeTip) }
+        let start = points[0]
+        let afterStart = points.dropFirst().first(where: { hypot($0.x - start.x, $0.y - start.y) > 1 })
+        if head == .double, let afterStart { shaft[0] = trim(start, from: afterStart) }
+        cg.addLines(between: shaft)
+        cg.strokePath()
+        cg.setLineDash(phase: 0, lengths: [])
+        switch head {
+        case .tapered:
+            cg.addPath(arrowHeadPath(from: beforeTip, to: tip, size: size))
+            cg.fillPath()
+        case .double:
+            cg.addPath(arrowHeadPath(from: beforeTip, to: tip, size: size))
+            if let afterStart { cg.addPath(arrowHeadPath(from: afterStart, to: start, size: size)) }
+            cg.fillPath()
+        case .open:
+            let dx = tip.x - beforeTip.x, dy = tip.y - beforeTip.y
+            let length = max(hypot(dx, dy), 0.001)
+            let ux = dx / length, uy = dy / length
+            let arm = min(AnnotationItem.arrowHeadLength(size), length * 0.6)
+            let spread = arm * 0.6
+            let base = CGPoint(x: tip.x - ux * arm, y: tip.y - uy * arm)
+            cg.addLines(between: [CGPoint(x: base.x - uy * spread, y: base.y + ux * spread), tip,
+                                  CGPoint(x: base.x + uy * spread, y: base.y - ux * spread)])
+            cg.strokePath()
+        }
     }
 
     /// A plain triangular head at `tip`, pointing away from `tail`; used by polyline arrows whose shaft is a stroke.

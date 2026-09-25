@@ -99,14 +99,15 @@ final class CaptureHistory {
 // MARK: - Codable annotations
 
 extension AnnotationItem: Codable {
-    private enum CodingKeys: String, CodingKey { case id, shape, color, size, effect }
+    private enum CodingKeys: String, CodingKey { case id, shape, color, size, effect, style }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let rgba = try c.decode([CGFloat].self, forKey: .color)
         self.init(id: try c.decode(UUID.self, forKey: .id), shape: try c.decode(Shape.self, forKey: .shape),
                   color: NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba.count > 3 ? rgba[3] : 1),
-                  size: try c.decode(CGFloat.self, forKey: .size), effect: try c.decode(MosaicEffect.self, forKey: .effect))
+                  size: try c.decode(CGFloat.self, forKey: .size), effect: try c.decode(MosaicEffect.self, forKey: .effect),
+                  style: try c.decodeIfPresent(ItemStyle.self, forKey: .style) ?? ItemStyle())
     }
 
     func encode(to encoder: Encoder) throws {
@@ -117,5 +118,6 @@ extension AnnotationItem: Codable {
         try c.encode([s.redComponent, s.greenComponent, s.blueComponent, s.alphaComponent], forKey: .color)
         try c.encode(size, forKey: .size)
         try c.encode(effect, forKey: .effect)
+        try c.encode(style, forKey: .style)
     }
 }

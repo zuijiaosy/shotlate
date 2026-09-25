@@ -207,6 +207,8 @@ final class ToolbarView: PanelView {
         stack.addArrangedSubview(done)
         setFrameSize(stack.fittingSize)
         stack.frame = bounds
+        // Lay out now: the style bar's caret uses the button positions before the toolbar is first drawn.
+        stack.layoutSubtreeIfNeeded()
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -253,10 +255,98 @@ struct StyleState {
     var size: CGFloat
     var mosaicMode: MosaicMode
     var mosaicEffect: MosaicEffect
+    var options = ItemStyle()
 }
 
 enum StyleAction {
     case size(CGFloat), color(NSColor), customColor, mosaicMode(MosaicMode), mosaicEffect(MosaicEffect)
+    /// Changes dash, arrowhead, rounded corners or text decoration.
+    case options((inout ItemStyle) -> Void)
+}
+
+/// Small template icons for the style options, drawn so each one shows exactly what it does.
+enum OptionIcon {
+    static func dash(_ dash: DashStyle) -> NSImage {
+        icon { rect in
+            let path = NSBezierPath()
+            path.move(to: CGPoint(x: 1, y: rect.midY))
+            path.line(to: CGPoint(x: rect.maxX - 1, y: rect.midY))
+            path.lineWidth = 2
+            switch dash {
+            case .solid: break
+            case .dashed: path.setLineDash([4, 2.5], count: 2, phase: 0)
+            case .dotted:
+                path.lineCapStyle = .round
+                path.setLineDash([0.01, 3.5], count: 2, phase: 0)
+            }
+            path.stroke()
+        }
+    }
+
+    static func rounded(_ on: Bool) -> NSImage {
+        icon { rect in
+            let r = rect.insetBy(dx: 2, dy: 3)
+            let path = on ? NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4) : NSBezierPath(rect: r)
+            path.lineWidth = 1.6
+            path.stroke()
+        }
+    }
+
+    static func arrow(_ head: ArrowHead) -> NSImage {
+        icon { rect in
+            let a = CGPoint(x: 2, y: 3), b = CGPoint(x: rect.maxX - 2, y: rect.maxY - 3)
+            let shaft = NSBezierPath()
+            shaft.move(to: a)
+            shaft.line(to: b)
+            shaft.lineWidth = 1.6
+            shaft.stroke()
+            func drawHead(at tip: CGPoint, from tail: CGPoint, filled: Bool) {
+                let angle = atan2(tip.y - tail.y, tip.x - tail.x)
+                let p = NSBezierPath()
+                p.move(to: CGPoint(x: tip.x - 6 * cos(angle - 0.5), y: tip.y - 6 * sin(angle - 0.5)))
+                p.line(to: tip)
+                p.line(to: CGPoint(x: tip.x - 6 * cos(angle + 0.5), y: tip.y - 6 * sin(angle + 0.5)))
+                p.lineWidth = 1.6
+                if filled {
+                    p.close()
+                    p.fill()
+                } else {
+                    p.stroke()
+                }
+            }
+            drawHead(at: b, from: a, filled: head != .open)
+            if head == .double { drawHead(at: a, from: b, filled: true) }
+        }
+    }
+
+    static func text(_ decoration: TextDecoration) -> NSImage {
+        icon { rect in
+            let font = NSFont.systemFont(ofSize: 12, weight: .heavy)
+            if decoration == .background {
+                NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 1), xRadius: 3, yRadius: 3).fill()
+                NSGraphicsContext.current?.compositingOperation = .destinationOut
+            }
+            var attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+            if decoration == .outline {
+                attributes[.strokeWidth] = 4
+                attributes[.strokeColor] = NSColor.black
+            }
+            let a = NSAttributedString(string: "A", attributes: attributes)
+            let size = a.size()
+            a.draw(at: CGPoint(x: (rect.width - size.width) / 2, y: (rect.height - size.height) / 2))
+        }
+    }
+
+    private static func icon(_ draw: @escaping (CGRect) -> Void) -> NSImage {
+        let image = NSImage(size: CGSize(width: 16, height: 14), flipped: false) { rect in
+            NSColor.black.setStroke()
+            NSColor.black.setFill()
+            draw(rect)
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
 }
 
 /// Size, color and mosaic options for the active tool or the selected annotation.
@@ -268,6 +358,10 @@ final class StyleBarView: PanelView {
     private var modeButtons: [MosaicMode: ChromeButton] = [:]
     private var effectButtons: [MosaicEffect: ChromeButton] = [:]
     private var customButton: ChromeButton?
+    private var dashButtons: [DashStyle: ChromeButton] = [:]
+    private var headButtons: [ArrowHead: ChromeButton] = [:]
+    private var textButtons: [TextDecoration: ChromeButton] = [:]
+    private var roundedButton: ChromeButton?
     private let handler: (StyleAction) -> Void
     private(set) var configuredTool: Tool?
     private var configuredMode: MosaicMode?
@@ -302,6 +396,10 @@ final class StyleBarView: PanelView {
         modeButtons = [:]
         effectButtons = [:]
         customButton = nil
+        dashButtons = [:]
+        headButtons = [:]
+        textButtons = [:]
+        roundedButton = nil
 
         if state.tool.usesAreaModes {
             for (mode, symbol, tip) in [(MosaicMode.brush, "paintbrush.pointed", "画笔涂抹"), (.rect, "rectangle.dashed", "框选区域")] {
@@ -323,6 +421,7 @@ final class StyleBarView: PanelView {
             }
         } else {
             addSizeButtons(state.tool)
+            addOptionButtons(state.tool)
             stack.addArrangedSubview(separator(height: 16))
             for color in StyleState.palette {
                 let b = ChromeButton(image: swatch(color), tooltip: "颜色", size: 24) { [unowned self] in self.handler(.color(color)) }
@@ -339,6 +438,36 @@ final class StyleBarView: PanelView {
         let content = stack.fittingSize
         setFrameSize(CGSize(width: content.width + 16, height: content.height + 8 + (caret == nil ? 0 : PanelView.caretHeight)))
         layoutStack()
+    }
+
+    /// Line style, arrowheads, rounded corners or text decoration, depending on the tool.
+    private func addOptionButtons(_ tool: Tool) {
+        func add(_ image: NSImage, _ tip: String, _ change: @escaping (inout ItemStyle) -> Void) -> ChromeButton {
+            let b = ChromeButton(image: image, tooltip: tip, size: 26) { [unowned self] in self.handler(.options(change)) }
+            stack.addArrangedSubview(b)
+            return b
+        }
+        if tool == .arrow {
+            stack.addArrangedSubview(separator(height: 16))
+            for (head, tip) in [(ArrowHead.tapered, "实心箭头"), (.open, "线条箭头"), (.double, "双向箭头")] {
+                headButtons[head] = add(OptionIcon.arrow(head), tip) { $0.arrowHead = head }
+            }
+        }
+        if [.rectangle, .ellipse, .line, .arrow, .pen].contains(tool) {
+            stack.addArrangedSubview(separator(height: 16))
+            for (dash, tip) in [(DashStyle.solid, "实线"), (.dashed, "虚线"), (.dotted, "点线")] {
+                dashButtons[dash] = add(OptionIcon.dash(dash), tip) { $0.dash = dash }
+            }
+        }
+        if tool == .rectangle {
+            roundedButton = add(OptionIcon.rounded(true), "圆角矩形") { $0.rounded.toggle() }
+        }
+        if tool == .text {
+            stack.addArrangedSubview(separator(height: 16))
+            for (decoration, tip) in [(TextDecoration.plain, "普通文字"), (.background, "文字加底色"), (.outline, "文字描边")] {
+                textButtons[decoration] = add(OptionIcon.text(decoration), tip) { $0.text = decoration }
+            }
+        }
     }
 
     private func addSizeButtons(_ tool: Tool) {
@@ -366,6 +495,10 @@ final class StyleBarView: PanelView {
             matched = matched || b.isActive
         }
         customButton?.isActive = !matched
+        for (dash, b) in dashButtons { b.isActive = dash == state.options.dash }
+        for (head, b) in headButtons { b.isActive = head == state.options.arrowHead }
+        for (decoration, b) in textButtons { b.isActive = decoration == state.options.text }
+        roundedButton?.isActive = state.options.rounded
         for (mode, b) in modeButtons { b.isActive = mode == state.mosaicMode }
         for (effect, b) in effectButtons { b.isActive = effect == state.mosaicEffect }
     }

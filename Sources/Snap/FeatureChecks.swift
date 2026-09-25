@@ -30,6 +30,7 @@ enum FeatureChecks {
         ("pin-restore", pinRestore),
         ("selection-size", selectionSize),
         ("tool-colors", toolColors),
+        ("item-styles", itemStyles),
     ]
 
     @MainActor
@@ -653,5 +654,69 @@ enum FeatureChecks {
         let after = h.view.testing_items.last?.color
         expect(after?.isApproximately(StyleState.palette[4]) == true && abs((after?.alphaComponent ?? 1) - 0.7) < 0.01, "picking a swatch keeps the opacity")
         h.export().map { write($0, "tool-colors.png") }
+    }
+
+    @MainActor static func itemStyles() async {
+        UserDefaults.standard.removeObject(forKey: "style.options")
+        for tool in Tool.allCases { StyleMemory.setColor(StyleState.palette[0], for: tool) }
+        StyleMemory.sizes = [:]
+        let h = CaptureHarness()
+        h.select(CGRect(x: 20, y: 20, width: 760, height: 460))
+        func option(_ change: @escaping (inout ItemStyle) -> Void) { h.view.testing_applyStyle(.options(change)) }
+
+        h.key("r", code: 15)
+        option { $0.dash = .dashed }
+        option { $0.rounded = true }
+        h.drag(CGPoint(x: 60, y: 60), CGPoint(x: 260, y: 160))
+        // Esc first each time: an option change applies to the selected annotation, and the last one drawn is selected.
+        h.key("\u{1b}", code: 53)
+        h.key("a", code: 0)
+        option { $0.arrowHead = .open }
+        h.drag(CGPoint(x: 300, y: 160), CGPoint(x: 450, y: 70))
+        h.key("\u{1b}", code: 53)
+        option { $0.arrowHead = .double }
+        h.drag(CGPoint(x: 480, y: 120), CGPoint(x: 700, y: 120))
+        h.key("\u{1b}", code: 53)
+        h.key("l", code: 37)
+        option { $0.dash = .dotted }
+        h.drag(CGPoint(x: 60, y: 220), CGPoint(x: 400, y: 220))
+        h.key("\u{1b}", code: 53)
+        h.key("t", code: 17)
+        option { $0.text = .background }
+        h.click(CGPoint(x: 460, y: 200))
+        (h.window.firstResponder as? NSTextView)?.insertText("底色文字", replacementRange: NSRange(location: NSNotFound, length: 0))
+        h.key("\u{1b}", code: 53)
+        h.key("\u{1b}", code: 53)
+        option { $0.text = .outline }
+        h.click(CGPoint(x: 460, y: 330))
+        (h.window.firstResponder as? NSTextView)?.insertText("描边文字", replacementRange: NSRange(location: NSNotFound, length: 0))
+        h.key("\u{1b}", code: 53)
+
+        let items = h.view.testing_items
+        expect(items.count == 6, "six styled annotations (\(items.count))")
+        expect(items[0].style.dash == .dashed && items[0].style.rounded, "rectangle is dashed and rounded")
+        expect(items[1].style.arrowHead == .open && items[2].style.arrowHead == .double, "arrow heads are remembered per new arrow")
+        expect(items[4].style.text == .background && items[5].style.text == .outline, "text decorations applied")
+        expect(StyleMemory.style(for: .rectangle).dash == .dashed && StyleMemory.style(for: .text).text == .outline, "options are remembered per tool")
+
+        h.key("\u{1b}", code: 53)
+        h.key("\u{1b}", code: 53)
+        h.key("a", code: 0)
+        h.screenshot().map { write($0, "item-styles-bar.png") }
+        guard let rep = h.export() else { return expect(false, "export") }
+        write(rep, "item-styles.png")
+        func out(_ x: CGFloat, _ y: CGFloat) -> NSColor { rep.color(atPoint: CGPoint(x: x - 20, y: y - 20))! }
+        func red(_ c: NSColor) -> Bool { c.redComponent > 0.8 && c.greenComponent < 0.45 }
+        let edge = (0..<60).map { out(100 + CGFloat($0), 60) }
+        expect(edge.contains(where: red) && edge.contains(where: { !red($0) }), "dashed edge has both ink and gaps")
+        expect(!red(out(61, 61)), "rounded rectangle leaves the sharp corner empty")
+        expect(red(out(486, 120)), "double arrow has a head at the start too")
+        // Inside the background pill, between glyphs.
+        let text = items[4]
+        expect(red(out(text.bounds.minX + 2, text.bounds.midY)), "text background is filled with the color")
+        // Old history JSON without a style still decodes.
+        let legacy = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","shape":{"number":{"_0":[1,2]}},"color":[1,0,0,1],"size":20,"effect":"pixelate"}"#
+        let decoded = try? JSONDecoder().decode(AnnotationItem.self, from: Data(legacy.utf8))
+        expect(decoded?.style == ItemStyle(), "annotations saved before styles existed still load")
     }
 }
