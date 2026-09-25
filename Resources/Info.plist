@@ -10,6 +10,8 @@
 	<string>app.snap.Snap</string>
 	<key>CFBundleExecutable</key>
 	<string>Snap</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

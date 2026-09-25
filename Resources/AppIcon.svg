@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- AppIcon-art.png 是 gpt-image-2.5 生成的满版正方形画面；这里裁成 macOS 标准底板（824×824）并加投影 -->
+  <defs>
+    <clipPath id="body"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
+    <filter id="drop" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="14" stdDeviation="16" flood-color="#000" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#3656E0" filter="url(#drop)"/>
+  <image x="100" y="100" width="824" height="824" xlink:href="AppIcon-art.png" clip-path="url(#body)"/>
+</svg>
