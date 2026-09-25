@@ -56,6 +56,7 @@ enum FeatureChecks {
         ("pin-translate", pinTranslate),
         ("beautify", beautify),
         ("pin-text", pinText),
+        ("toolbar-placement", toolbarPlacement),
     ]
 
     @MainActor
@@ -196,6 +197,57 @@ enum FeatureChecks {
         let empty = pinned { }
         expect(empty.isEmpty, "empty clipboard pins nothing")
         manager.closeAll()
+    }
+
+    @MainActor static func toolbarPlacement() async {
+        func chrome(_ h: CaptureHarness) -> (ToolbarView, StyleBarView) {
+            (h.view.subviews.compactMap { $0 as? ToolbarView }.first!, h.view.subviews.compactMap { $0 as? StyleBarView }.first!)
+        }
+        let size = CGSize(width: 1200, height: 860)
+
+        var h = CaptureHarness(size: size)
+        h.select(CGRect(x: 100, y: 100, width: 600, height: 300))
+        var (bar, style) = chrome(h)
+        expect(!bar.isVertical && bar.frame.minY >= 400, "room below: the toolbar is a row under the selection")
+
+        h = CaptureHarness(size: size)
+        let low = CGRect(x: 100, y: 300, width: 700, height: 540)
+        h.select(low)
+        h.key("r", code: 15)
+        (bar, style) = chrome(h)
+        expect(bar.isVertical && bar.frame.minX == low.maxX + 8, "no room below: a column against the right edge (\(bar.frame))")
+        expect(bar.frame.maxY <= size.height - 4 && bar.frame.minY >= 4, "the column stays on screen")
+        let icon = bar.anchor(for: .rectangle)!.y + bar.frame.minY
+        expect(!style.isHidden && style.frame.maxX <= bar.frame.minX && abs(style.frame.midY - icon) < 2,
+               "the style bar sits left of the column, level with its tool (\(style.frame))")
+        h.screenshot().map { write($0, "toolbar-right.png") }
+
+        h = CaptureHarness(size: size)
+        let wide = CGRect(x: 400, y: 300, width: 790, height: 540)
+        h.select(wide)
+        h.key("r", code: 15)
+        (bar, style) = chrome(h)
+        expect(bar.isVertical && bar.frame.maxX == wide.minX - 8, "no room right: the column goes left (\(bar.frame))")
+        expect(style.frame.minX >= bar.frame.maxX, "with the style bar right of it")
+        h.screenshot().map { write($0, "toolbar-left.png") }
+
+        h = CaptureHarness(size: size)
+        h.select(CGRect(x: 2, y: 2, width: 1196, height: 856))
+        (bar, style) = chrome(h)
+        expect(bar.isVertical && bar.frame.maxX == 1198 - 8, "no room outside: a column inside the right edge (\(bar.frame))")
+
+        // A narrow full-height selection at the right edge: the column goes outside, on its left.
+        h = CaptureHarness(size: size)
+        h.select(CGRect(x: 1100, y: 2, width: 98, height: 856))
+        (bar, style) = chrome(h)
+        expect(bar.isVertical && bar.frame.maxX == 1100 - 8, "a narrow selection at the edge gets the column on its left (\(bar.frame))")
+
+        // Back from a column to a row when the selection moves up.
+        h = CaptureHarness(size: size)
+        h.select(low)
+        for _ in 0..<100 { h.key("", code: 126) }
+        (bar, style) = chrome(h)
+        expect(!bar.isVertical, "moving the selection up turns the column back into a row (\(bar.frame))")
     }
 
     @MainActor static func countdown() async {
@@ -399,6 +451,12 @@ enum FeatureChecks {
         h.key("t", code: 17, flags: .command)
         files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         expect(files.count == 2 && files.contains("\(expected) 2.png"), "pinning also auto-saves, with a numbered name on collision (\(files.sorted()))")
+
+        h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 300, height: 200))
+        h.key("t", code: 17)
+        files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        expect(files.count == 3, "a plain T pins too (\(files.sorted()))")
         PinManager.shared.closeAll()
     }
 
@@ -711,7 +769,7 @@ enum FeatureChecks {
         option { $0.dash = .dotted }
         h.drag(CGPoint(x: 60, y: 220), CGPoint(x: 400, y: 220))
         h.key("\u{1b}", code: 53)
-        h.key("t", code: 17)
+        h.key("1", code: 18)
         option { $0.text = .background }
         h.click(CGPoint(x: 460, y: 200))
         (h.window.firstResponder as? NSTextView)?.insertText("底色文字", replacementRange: NSRange(location: NSNotFound, length: 0))
@@ -850,6 +908,9 @@ enum FeatureChecks {
         let toolbar = ToolbarView { _ in }
         expect(toolbar.subviews.first.map { $0.subviews.contains { ($0 as? NSButton)?.toolTip?.hasPrefix("分享") == true } } ?? false,
                "the capture toolbar has a share button")
+        let labels = Set(Tool.allCases.map { ToolbarAction.tool($0).shortcut } + ToolbarAction.singleKeyActions.map(\.shortcut))
+        expect(labels.count == Tool.allCases.count + ToolbarAction.singleKeyActions.count && labels.allSatisfy { $0.count == 1 },
+               "every tool and single-key action has its own key (\(labels.sorted()))")
     }
 
     @MainActor static func boards() async {

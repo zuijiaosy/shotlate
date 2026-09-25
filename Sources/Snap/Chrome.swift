@@ -7,12 +7,16 @@ let selectionBlue = NSColor(srgbRed: 0.16, green: 0.58, blue: 0.93, alpha: 1)
 /// Rounded panel drawn to match the system appearance, with an optional caret pointing
 /// at the control it belongs to. The caret sits outside `contentRect`.
 class PanelView: NSView {
-    enum CaretEdge { case top, bottom }
+    enum CaretEdge {
+        case top, bottom, left, right
+        var isVertical: Bool { self == .top || self == .bottom }
+    }
 
     static let caretHeight: CGFloat = 6
     var fill: NSColor = .windowBackgroundColor { didSet { needsDisplay = true } }
     var radius: CGFloat = 9
-    var caret: (edge: CaretEdge, x: CGFloat)? {
+    /// Edge and position along it (x for top/bottom, y for left/right).
+    var caret: (edge: CaretEdge, offset: CGFloat)? {
         didSet {
             needsDisplay = true
             caretDidChange()
@@ -42,8 +46,12 @@ class PanelView: NSView {
     var contentRect: CGRect {
         var r = bounds
         if let caret {
-            r.size.height -= Self.caretHeight
-            if caret.edge == .top { r.origin.y += Self.caretHeight }
+            switch caret.edge {
+            case .top: r.origin.y += Self.caretHeight; r.size.height -= Self.caretHeight
+            case .bottom: r.size.height -= Self.caretHeight
+            case .left: r.origin.x += Self.caretHeight; r.size.width -= Self.caretHeight
+            case .right: r.size.width -= Self.caretHeight
+            }
         }
         return r
     }
@@ -52,16 +60,22 @@ class PanelView: NSView {
         let body = contentRect.insetBy(dx: 0.5, dy: 0.5)
         let path = NSBezierPath(roundedRect: body, xRadius: radius, yRadius: radius)
         if let caret {
-            let x = min(max(caret.x, body.minX + radius + 6), body.maxX - radius - 6)
             let tri = NSBezierPath()
-            if caret.edge == .top {
-                tri.move(to: CGPoint(x: x - 7, y: body.minY + 1))
-                tri.line(to: CGPoint(x: x, y: body.minY - Self.caretHeight + 0.5))
-                tri.line(to: CGPoint(x: x + 7, y: body.minY + 1))
+            let h = Self.caretHeight
+            if caret.edge.isVertical {
+                let x = min(max(caret.offset, body.minX + radius + 6), body.maxX - radius - 6)
+                let base = caret.edge == .top ? body.minY + 1 : body.maxY - 1
+                let tip = caret.edge == .top ? body.minY - h + 0.5 : body.maxY + h - 0.5
+                tri.move(to: CGPoint(x: x - 7, y: base))
+                tri.line(to: CGPoint(x: x, y: tip))
+                tri.line(to: CGPoint(x: x + 7, y: base))
             } else {
-                tri.move(to: CGPoint(x: x - 7, y: body.maxY - 1))
-                tri.line(to: CGPoint(x: x, y: body.maxY + Self.caretHeight - 0.5))
-                tri.line(to: CGPoint(x: x + 7, y: body.maxY - 1))
+                let y = min(max(caret.offset, body.minY + radius + 6), body.maxY - radius - 6)
+                let base = caret.edge == .left ? body.minX + 1 : body.maxX - 1
+                let tip = caret.edge == .left ? body.minX - h + 0.5 : body.maxX + h - 0.5
+                tri.move(to: CGPoint(x: base, y: y - 7))
+                tri.line(to: CGPoint(x: tip, y: y))
+                tri.line(to: CGPoint(x: base, y: y + 7))
             }
             tri.close()
             path.append(tri)
@@ -75,18 +89,26 @@ class PanelView: NSView {
 }
 
 /// Borderless button that runs a closure, with hover and "active" states.
+/// With a `shortcut`, the key is drawn small at the icon's lower right, like Excalidraw's toolbar.
 final class ChromeButton: NSButton {
     private let handler: () -> Void
     private var hovering = false
+    private let shortcut: NSAttributedString?
+    private static let shortcutFont = NSFont.systemFont(ofSize: 8.5, weight: .medium)
+    /// Width of the icon area; the shortcut label hangs off its lower right.
+    private let iconWidth: CGFloat
     var tint: NSColor = .labelColor { didSet { needsDisplay = true } }
 
     var isActive = false {
         didSet { needsDisplay = true }
     }
 
-    init(image: NSImage, tooltip: String, size: CGFloat = 30, handler: @escaping () -> Void) {
+    init(image: NSImage, tooltip: String, size: CGFloat = 30, shortcut: String? = nil, handler: @escaping () -> Void) {
         self.handler = handler
-        super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
+        self.shortcut = shortcut.map { NSAttributedString(string: $0, attributes: [.font: Self.shortcutFont]) }
+        iconWidth = max(24, ceil(image.size.width) + 4)
+        let width = self.shortcut.map { [iconWidth] in max(size, iconWidth + ceil($0.size().width) + 3) } ?? size
+        super.init(frame: CGRect(x: 0, y: 0, width: width, height: size))
         self.image = image
         toolTip = tooltip
         isBordered = false
@@ -95,7 +117,7 @@ final class ChromeButton: NSButton {
         target = self
         action = #selector(fire)
         translatesAutoresizingMaskIntoConstraints = false
-        widthAnchor.constraint(equalToConstant: size).isActive = true
+        widthAnchor.constraint(equalToConstant: width).isActive = true
         heightAnchor.constraint(equalToConstant: size).isActive = true
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
@@ -123,8 +145,28 @@ final class ChromeButton: NSButton {
             NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 6, yRadius: 6).fill()
         }
         contentTintColor = isActive ? selectionBlue : tint
-        super.draw(dirtyRect)
+        guard let shortcut, let image else { return super.draw(dirtyRect) }
+
+        // Draw the icon ourselves so it sits left of the shortcut instead of centered in the wider button.
+        let color = contentTintColor ?? tint
+        let icon = image.isTemplate ? NSImage(size: image.size, flipped: false) { r in
+            image.draw(in: r)
+            color.set()
+            r.fill(using: .sourceAtop)
+            return true
+        } : image
+        let box = CGRect(x: 3, y: 0, width: iconWidth, height: bounds.height)
+        icon.draw(in: CGRect(x: (box.midX - image.size.width / 2).rounded(), y: (box.midY - image.size.height / 2).rounded(),
+                             width: image.size.width, height: image.size.height),
+                  from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        let label = NSMutableAttributedString(attributedString: shortcut)
+        label.addAttribute(.foregroundColor, value: isActive ? selectionBlue : NSColor.secondaryLabelColor,
+                           range: NSRange(location: 0, length: label.length))
+        label.draw(at: CGPoint(x: box.maxX - 3, y: bounds.height - label.size().height - 2))
     }
+
+    /// Center of the icon, in the button's coordinates.
+    var iconCenterX: CGFloat { shortcut == nil ? bounds.midX : 3 + iconWidth / 2 }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
@@ -163,15 +205,44 @@ private func separator(height: CGFloat = 18) -> NSView {
 
 enum ToolbarAction {
     case tool(Tool), undo, redo, ocr, translate, redact, pin, longCapture, cancel, save, share, done
+
+    /// Key shown at the button's lower right. Buttons use a single key; ones without a customary
+    /// letter take the next digit (text 1, share 2). Undo, redo, save, cancel and done keep the
+    /// shortcuts everyone already knows.
+    var shortcut: String {
+        switch self {
+        case let .tool(t): return t.key.uppercased()
+        case .undo: return "⌘Z"
+        case .redo: return "⇧⌘Z"
+        case .ocr: return "X"
+        case .translate: return "Y"
+        case .redact: return "B"
+        case .pin: return "T"
+        case .longCapture: return "S"
+        case .cancel: return "Esc"
+        case .save: return "⌘S"
+        case .share: return "2"
+        case .done: return "↩"
+        }
+    }
+
+    /// Non-tool buttons triggered by their unmodified single key.
+    static let singleKeyActions: [ToolbarAction] = [.ocr, .translate, .redact, .pin, .longCapture, .share]
 }
 
 /// Bottom toolbar: annotation tools | undo, redo | OCR, translate | cancel, save, done.
+/// Turns vertical when there is no room under the selection, to sit beside it instead.
 final class ToolbarView: PanelView {
     private(set) var toolButtons: [Tool: ChromeButton] = [:]
     private(set) var translateButton: ChromeButton!
     private(set) var undoButton: ChromeButton!
     private(set) var redoButton: ChromeButton!
     private let stack = NSStackView()
+    private var separators: [(width: NSLayoutConstraint, height: NSLayoutConstraint)] = []
+    private(set) var isVertical = false
+    /// Sizes of the horizontal and vertical layouts, measured once.
+    private(set) var horizontalSize = CGSize.zero
+    private(set) var verticalSize = CGSize.zero
 
     init(handler: @escaping (ToolbarAction) -> Void) {
         super.init(frame: .zero)
@@ -181,32 +252,49 @@ final class ToolbarView: PanelView {
         addSubview(stack)
 
         for tool in Tool.allCases {
-            let button = ChromeButton(image: symbolImage(tool.symbol), tooltip: "\(tool.title)  \(tool.key.uppercased())") {
+            let button = ChromeButton(image: symbolImage(tool.symbol), tooltip: "\(tool.title)  \(tool.key.uppercased())",
+                                      shortcut: ToolbarAction.tool(tool).shortcut) {
                 handler(.tool(tool))
             }
             toolButtons[tool] = button
             stack.addArrangedSubview(button)
         }
         addSeparator()
-        undoButton = ChromeButton(image: symbolImage("arrow.uturn.backward"), tooltip: "撤销  ⌘Z") { handler(.undo) }
-        redoButton = ChromeButton(image: symbolImage("arrow.uturn.forward"), tooltip: "重做  ⇧⌘Z") { handler(.redo) }
+        undoButton = ChromeButton(image: symbolImage("arrow.uturn.backward"), tooltip: "撤销  ⌘Z", shortcut: ToolbarAction.undo.shortcut) { handler(.undo) }
+        redoButton = ChromeButton(image: symbolImage("arrow.uturn.forward"), tooltip: "重做  ⇧⌘Z", shortcut: ToolbarAction.redo.shortcut) { handler(.redo) }
         stack.addArrangedSubview(undoButton)
         stack.addArrangedSubview(redoButton)
         addSeparator()
-        stack.addArrangedSubview(ChromeButton(image: badgeImage("OCR"), tooltip: "识别文字  X") { handler(.ocr) })
-        translateButton = ChromeButton(image: symbolImage("translate"), tooltip: "翻译到原位  Y\n再按一次切换原文，按住 ⌥ 临时查看原文") { handler(.translate) }
+        stack.addArrangedSubview(ChromeButton(image: badgeImage("OCR"), tooltip: "识别文字  X", shortcut: ToolbarAction.ocr.shortcut) { handler(.ocr) })
+        translateButton = ChromeButton(image: symbolImage("translate"), tooltip: "翻译到原位  Y\n再按一次切换原文，按住 ⌥ 临时查看原文", shortcut: ToolbarAction.translate.shortcut) { handler(.translate) }
         stack.addArrangedSubview(translateButton)
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("eye.slash"), tooltip: "智能打码  B\n自动遮住手机号、邮箱、身份证号、银行卡号和密钥") { handler(.redact) })
+        stack.addArrangedSubview(ChromeButton(image: symbolImage("eye.slash"), tooltip: "智能打码  B\n自动遮住手机号、邮箱、身份证号、银行卡号和密钥", shortcut: ToolbarAction.redact.shortcut) { handler(.redact) })
         addSeparator()
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("pin"), tooltip: "贴到屏幕上  ⌘T") { handler(.pin) })
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("arrow.up.and.down.text.horizontal"), tooltip: "长截图  S\n在选区里滚动，自动拼接成长图") { handler(.longCapture) })
+        stack.addArrangedSubview(ChromeButton(image: symbolImage("pin"), tooltip: "贴到屏幕上  T", shortcut: ToolbarAction.pin.shortcut) { handler(.pin) })
+        stack.addArrangedSubview(ChromeButton(image: symbolImage("arrow.up.and.down.text.horizontal"), tooltip: "长截图  S\n在选区里滚动，自动拼接成长图", shortcut: ToolbarAction.longCapture.shortcut) { handler(.longCapture) })
         addSeparator()
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("xmark"), tooltip: "退出截图  Esc") { handler(.cancel) })
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("square.and.arrow.down"), tooltip: "保存  ⌘S\n另存为  ⇧⌘S") { handler(.save) })
-        stack.addArrangedSubview(ChromeButton(image: symbolImage("square.and.arrow.up"), tooltip: "分享：隔空投送、邮件、信息、备忘录…") { handler(.share) })
-        let done = ChromeButton(image: symbolImage("checkmark", weight: .semibold), tooltip: "复制到剪贴板  Return / 双击选区") { handler(.done) }
+        stack.addArrangedSubview(ChromeButton(image: symbolImage("xmark"), tooltip: "退出截图  Esc", shortcut: ToolbarAction.cancel.shortcut) { handler(.cancel) })
+        stack.addArrangedSubview(ChromeButton(image: symbolImage("square.and.arrow.down"), tooltip: "保存  ⌘S\n另存为  ⇧⌘S", shortcut: ToolbarAction.save.shortcut) { handler(.save) })
+        stack.addArrangedSubview(ChromeButton(image: symbolImage("square.and.arrow.up"), tooltip: "分享  2\n隔空投送、邮件、信息、备忘录…", shortcut: ToolbarAction.share.shortcut) { handler(.share) })
+        let done = ChromeButton(image: symbolImage("checkmark", weight: .semibold), tooltip: "复制到剪贴板  Return / 双击选区", shortcut: ToolbarAction.done.shortcut) { handler(.done) }
         done.tint = selectionBlue
         stack.addArrangedSubview(done)
+        setVertical(true)
+        verticalSize = frame.size
+        setVertical(false)
+        horizontalSize = frame.size
+    }
+
+    func setVertical(_ vertical: Bool) {
+        isVertical = vertical
+        stack.orientation = vertical ? .vertical : .horizontal
+        // Leading in a column lines up the icons, which sit at the left of buttons with a shortcut.
+        stack.alignment = vertical ? .leading : .centerY
+        stack.edgeInsets = vertical ? NSEdgeInsets(top: 6, left: 4, bottom: 6, right: 4) : NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
+        for s in separators {
+            s.width.constant = vertical ? 22 : 1
+            s.height.constant = vertical ? 1 : 18
+        }
         setFrameSize(stack.fittingSize)
         stack.frame = bounds
         // Lay out now: the style bar's caret uses the button positions before the toolbar is first drawn.
@@ -218,6 +306,8 @@ final class ToolbarView: PanelView {
     private func addSeparator() {
         stack.setCustomSpacing(6, after: stack.arrangedSubviews[stack.arrangedSubviews.count - 1])
         let line = separator()
+        let constraints = line.constraints.filter { $0.firstAttribute == .width || $0.firstAttribute == .height }
+        separators.append((constraints.first { $0.firstAttribute == .width }!, constraints.first { $0.firstAttribute == .height }!))
         stack.addArrangedSubview(line)
         stack.setCustomSpacing(6, after: line)
     }
@@ -233,10 +323,11 @@ final class ToolbarView: PanelView {
         redoButton.alphaValue = canRedo ? 1 : 0.35
     }
 
-    /// Center of a tool button, in toolbar coordinates.
-    func anchorX(for tool: Tool) -> CGFloat? {
+    /// Center of a tool button's icon, in toolbar coordinates.
+    func anchor(for tool: Tool) -> CGPoint? {
         guard let button = toolButtons[tool] else { return nil }
-        return button.frame.midX
+        let frame = button.convert(button.bounds, to: self)
+        return CGPoint(x: frame.minX + button.iconCenterX, y: frame.midY)
     }
 }
 
@@ -438,7 +529,9 @@ final class StyleBarView: PanelView {
 
         stack.layoutSubtreeIfNeeded()
         let content = stack.fittingSize
-        setFrameSize(CGSize(width: content.width + 16, height: content.height + 8 + (caret == nil ? 0 : PanelView.caretHeight)))
+        let caretSize = caret == nil ? 0 : PanelView.caretHeight
+        let sideways = caret.map { !$0.edge.isVertical } ?? false
+        setFrameSize(CGSize(width: content.width + 16 + (sideways ? caretSize : 0), height: content.height + 8 + (sideways ? 0 : caretSize)))
         layoutStack()
     }
 

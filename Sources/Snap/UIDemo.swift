@@ -100,7 +100,7 @@ enum UIDemo {
         key("p", code: 35)
         drag(CGPoint(x: 460, y: 250), CGPoint(x: 660, y: 290))
 
-        key("t", code: 17)
+        key("1", code: 18)
         click(CGPoint(x: 420, y: 320))
         if let editor = window.firstResponder as? NSTextView {
             editor.insertText("Snap 标注\n第二行", replacementRange: NSRange(location: NSNotFound, length: 0))

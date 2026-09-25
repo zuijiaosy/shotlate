@@ -30,7 +30,7 @@ enum Tool: String, CaseIterable {
         case .mosaic: return "checkerboard.rectangle"
         case .eraser: return "eraser"
         case .magnifier: return "plus.magnifyingglass"
-        case .text: return "textformat"
+        case .text: return "character.cursor.ibeam" // "textformat" turns into 格式 under the zh_CN localization
         case .number: return "1.circle"
         }
     }
@@ -47,7 +47,7 @@ enum Tool: String, CaseIterable {
         case .mosaic: return "m"
         case .eraser: return "e"
         case .magnifier: return "g"
-        case .text: return "t"
+        case .text: return "1" // T pins the capture
         case .number: return "n"
         }
     }

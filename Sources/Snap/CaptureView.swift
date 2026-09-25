@@ -1444,14 +1444,8 @@ final class CaptureView: NSView {
         guard flags.isEmpty else { return }
         if let t = Tool.allCases.first(where: { $0.key == key }) {
             handle(.tool(t))
-        } else if key == "x" {
-            handle(.ocr)
-        } else if key == "y" {
-            handle(.translate)
-        } else if key == "b" {
-            handle(.redact)
-        } else if key == "s" {
-            handle(.longCapture)
+        } else if let action = ToolbarAction.singleKeyActions.first(where: { $0.shortcut.lowercased() == key }) {
+            handle(action)
         }
     }
 
@@ -1595,40 +1589,79 @@ final class CaptureView: NSView {
             return
         }
 
-        let size = toolbar.frame.size
-        var bar = CGPoint(x: selection.maxX - size.width, y: selection.maxY + 8)
+        // Under the selection; without room there, a column beside it (right, then left); failing both,
+        // a row above it, then a column inside its right edge, then a row inside its bottom edge.
+        let flat = toolbar.horizontalSize, column = toolbar.verticalSize
+        var bar = CGPoint(x: selection.maxX - flat.width, y: selection.maxY + 8)
         var below = true
-        if bar.y + size.height > bounds.maxY - 4 {
+        var side: PanelView.CaretEdge? = nil
+        var inside = false
+        if bar.y + flat.height > bounds.maxY - 4 {
             let aboveTop = topBar.frame.minY < selection.minY ? topBar.frame.minY : selection.minY
-            bar.y = aboveTop - size.height - 8
-            below = false
-            if bar.y < 4 {
-                bar.y = selection.maxY - size.height - 8
-                below = true
+            if column.height <= bounds.height - 8 {
+                if selection.maxX + 8 + column.width <= bounds.maxX - 4 {
+                    side = .right
+                } else if selection.minX - 8 - column.width >= 4 {
+                    side = .left
+                } else if aboveTop - flat.height - 8 < 4, selection.width > column.width * 3 {
+                    side = .right
+                    inside = true
+                }
+            }
+            if let side {
+                bar.x = inside ? selection.maxX - 8 - column.width
+                    : side == .right ? selection.maxX + 8 : selection.minX - 8 - column.width
+                // Bottom-aligned with the selection, like the horizontal bar hangs off its bottom-right corner.
+                bar.y = min(max(4, selection.maxY - column.height), bounds.maxY - column.height - 4)
+            } else {
+                bar.y = aboveTop - flat.height - 8
+                below = false
+                if bar.y < 4 {
+                    bar.y = selection.maxY - flat.height - 8
+                    below = true
+                }
             }
         }
-        bar.x = min(max(4, bar.x), bounds.maxX - size.width - 4)
+        if toolbar.isVertical != (side != nil) { toolbar.setVertical(side != nil) }
+        let size = toolbar.frame.size
+        if side == nil { bar.x = min(max(4, bar.x), bounds.maxX - size.width - 4) }
         toolbar.setFrameOrigin(bar)
 
         if let style, !styleBar.isHidden {
-            // Put the style bar next to the toolbar with a caret pointing at the tool it configures.
-            var styleBelow = below
-            let expectedHeight: CGFloat = 42
-            if styleBelow, bar.y + size.height + 4 + expectedHeight > bounds.maxY - 4 { styleBelow = false }
-            if !styleBelow, bar.y - 4 - expectedHeight < 4 { styleBelow = true }
-            styleBar.caret = (styleBelow ? .top : .bottom, 0)
-            styleBar.configure(style)
-            let anchor = bar.x + (toolbar.anchorX(for: style.tool) ?? size.width / 2)
-            let styleSize = styleBar.frame.size
-            let x = min(max(4, anchor - 26), bounds.maxX - styleSize.width - 4)
-            let y = styleBelow ? bar.y + size.height + 4 : bar.y - styleSize.height - 4
-            styleBar.setFrameOrigin(CGPoint(x: x, y: y))
-            styleBar.caret = (styleBelow ? .top : .bottom, anchor - x)
+            let icon = toolbar.anchor(for: style.tool) ?? CGPoint(x: size.width / 2, y: size.height / 2)
+            if let side {
+                // Beside the column, on the selection side, with the caret pointing at the tool.
+                styleBar.caret = (side == .right ? .right : .left, 0)
+                styleBar.configure(style)
+                let styleSize = styleBar.frame.size
+                let x = side == .right ? bar.x - styleSize.width - 4 : bar.x + size.width + 4
+                let anchor = bar.y + icon.y
+                let y = min(max(4, anchor - styleSize.height / 2), bounds.maxY - styleSize.height - 4)
+                styleBar.setFrameOrigin(CGPoint(x: min(max(4, x), bounds.maxX - styleSize.width - 4), y: y))
+                styleBar.caret = (side == .right ? .right : .left, anchor - y)
+            } else {
+                // Put the style bar next to the toolbar with a caret pointing at the tool it configures.
+                var styleBelow = below
+                let expectedHeight: CGFloat = 42
+                if styleBelow, bar.y + size.height + 4 + expectedHeight > bounds.maxY - 4 { styleBelow = false }
+                if !styleBelow, bar.y - 4 - expectedHeight < 4 { styleBelow = true }
+                styleBar.caret = (styleBelow ? .top : .bottom, 0)
+                styleBar.configure(style)
+                let anchor = bar.x + icon.x
+                let styleSize = styleBar.frame.size
+                let x = min(max(4, anchor - 26), bounds.maxX - styleSize.width - 4)
+                let y = styleBelow ? bar.y + size.height + 4 : bar.y - styleSize.height - 4
+                styleBar.setFrameOrigin(CGPoint(x: x, y: y))
+                styleBar.caret = (styleBelow ? .top : .bottom, anchor - x)
+            }
         }
 
+        // The OCR panel goes beside the selection, clear of a toolbar column there.
         let panel = ocrPanel.frame.size
-        var panelOrigin = CGPoint(x: selection.maxX + 10, y: selection.minY)
-        if panelOrigin.x + panel.width > bounds.maxX - 4 { panelOrigin.x = selection.minX - panel.width - 10 }
+        let right = side == .right && !inside ? toolbar.frame.maxX : selection.maxX
+        let left = side == .left ? toolbar.frame.minX : selection.minX
+        var panelOrigin = CGPoint(x: right + 10, y: selection.minY)
+        if panelOrigin.x + panel.width > bounds.maxX - 4 { panelOrigin.x = left - panel.width - 10 }
         if panelOrigin.x < 4 { panelOrigin.x = bounds.maxX - panel.width - 4 }
         panelOrigin.y = min(max(4, panelOrigin.y), bounds.maxY - panel.height - 4)
         ocrPanel.setFrameOrigin(panelOrigin)
