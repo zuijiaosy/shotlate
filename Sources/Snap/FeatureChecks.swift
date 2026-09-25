@@ -20,6 +20,7 @@ enum FeatureChecks {
         ("countdown", countdown),
         ("highlighter", highlighter),
         ("eraser", eraser),
+        ("polyline", polyline),
     ]
 
     @MainActor
@@ -243,5 +244,60 @@ enum FeatureChecks {
         let undone = h.export()!.color(atPoint: CGPoint(x: 250 - 40, y: 100 - 40))!
         expect(undone.redComponent > 0.8 && undone.greenComponent < 0.4, "undo brings the erased edge back")
         h.screenshot().map { write($0, "eraser-overlay.png") }
+    }
+
+    @MainActor static func polyline() async {
+        let h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 600, height: 360))
+        StyleMemory.color = StyleState.palette[4]
+        h.key("l", code: 37)
+        h.click(CGPoint(x: 100, y: 100))
+        h.click(CGPoint(x: 300, y: 100))
+        h.click(CGPoint(x: 300, y: 250))
+        h.click(CGPoint(x: 450, y: 250))
+        h.click(CGPoint(x: 450, y: 250), clicks: 2)
+        var items = h.view.testing_items
+        if case let .polyline(points, arrow) = items.last?.shape {
+            expect(points.count == 4 && !arrow, "clicks make a 4-corner polyline, double-click ends it (\(points.count) corners)")
+        } else {
+            expect(false, "clicks make a polyline (got \(String(describing: items.last?.shape)))")
+        }
+
+        h.key("a", code: 0)
+        h.click(CGPoint(x: 120, y: 330))
+        h.click(CGPoint(x: 250, y: 300))
+        h.click(CGPoint(x: 400, y: 340))
+        h.key("\r", code: 36)
+        items = h.view.testing_items
+        if case let .polyline(points, arrow) = items.last?.shape {
+            expect(points.count == 3 && arrow, "arrow tool clicks make a polyline arrow, Return ends it")
+        } else {
+            expect(false, "arrow polyline")
+        }
+
+        h.key("l", code: 37)
+        h.drag(CGPoint(x: 500, y: 120), CGPoint(x: 600, y: 180))
+        if case .line = h.view.testing_items.last?.shape {
+            expect(true, "dragging still draws a single line")
+        } else {
+            expect(false, "dragging still draws a single line")
+        }
+
+        guard let rep = h.export() else { return expect(false, "export") }
+        write(rep, "polyline.png")
+        func out(_ x: CGFloat, _ y: CGFloat) -> NSColor { rep.color(atPoint: CGPoint(x: x - 40, y: y - 40))! }
+        func isBlue(_ c: NSColor) -> Bool { c.blueComponent > 0.8 && c.redComponent < 0.35 }
+        expect(isBlue(out(200, 100)) && isBlue(out(300, 180)) && isBlue(out(380, 250)), "all three segments are drawn")
+        expect(isBlue(out(398, 339)), "arrow head is drawn at the last corner")
+
+        // Drag the second corner of the first polyline down by 30.
+        h.key("\u{1b}", code: 53)
+        h.key("\u{1b}", code: 53)
+        h.click(CGPoint(x: 200, y: 100))
+        h.drag(CGPoint(x: 300, y: 100), CGPoint(x: 300, y: 130))
+        if case let .polyline(points, _) = h.view.testing_items.first?.shape {
+            expect(abs(points[1].y - 130) < 0.5, "a corner handle moves just that corner (y \(points[1].y))")
+        }
+        h.screenshot().map { write($0, "polyline-overlay.png") }
     }
 }

@@ -91,6 +91,8 @@ enum Shape: Equatable {
     case ellipse(CGRect)
     case line(CGPoint, CGPoint)
     case arrow(CGPoint, CGPoint)
+    /// Connected segments from clicks; with `arrow` the last segment ends in an arrowhead.
+    case polyline([CGPoint], arrow: Bool)
     case pen([CGPoint])
     /// A translucent marker stroke, blended so text underneath stays readable.
     case highlighter([CGPoint])
@@ -114,6 +116,7 @@ struct AnnotationItem: Equatable {
         case .ellipse: return .ellipse
         case .line: return .line
         case .arrow: return .arrow
+        case let .polyline(_, arrow): return arrow ? .arrow : .line
         case .pen: return .pen
         case .highlighter: return .highlighter
         case .mosaicRect, .mosaicBrush: return effect == .original ? .eraser : .mosaic
@@ -178,6 +181,7 @@ enum ItemHandle: Equatable {
     case rect(ResizeHandle)
     case start
     case end
+    case vertex(Int)
 }
 
 // MARK: - Geometry
@@ -212,6 +216,9 @@ extension AnnotationItem {
         case let .arrow(a, b):
             let head = Self.arrowHeadWidth(size) / 2
             return CGRect(corners: a, b).insetBy(dx: -head, dy: -head)
+        case let .polyline(points, arrow):
+            let pad = arrow ? max(pad, Self.arrowHeadWidth(size) / 2) : pad
+            return points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -pad, dy: -pad)
         case let .pen(points), let .highlighter(points), let .mosaicBrush(points):
             return points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -pad, dy: -pad)
         case let .text(text, origin, width):
@@ -241,6 +248,8 @@ extension AnnotationItem {
             return distance(p, a, b) <= tolerance
         case let .arrow(a, b):
             return distance(p, a, b) <= max(tolerance, Self.arrowHeadWidth(size) / 2)
+        case let .polyline(points, _):
+            return zip(points, points.dropFirst()).contains { distance(p, $0, $1) <= tolerance }
         case let .pen(points), let .highlighter(points), let .mosaicBrush(points):
             if points.count == 1 { return hypot(p.x - points[0].x, p.y - points[0].y) <= tolerance }
             return zip(points, points.dropFirst()).contains { distance(p, $0, $1) <= tolerance }
@@ -257,6 +266,8 @@ extension AnnotationItem {
             return ResizeHandle.allCases.map { (.rect($0), $0.point(in: r)) }
         case let .line(a, b), let .arrow(a, b):
             return [(.start, a), (.end, b)]
+        case let .polyline(points, _):
+            return points.enumerated().map { (.vertex($0.offset), $0.element) }
         default:
             return []
         }
@@ -271,6 +282,7 @@ extension AnnotationItem {
         case let .mosaicRect(r): copy.shape = .mosaicRect(r.offsetBy(dx: d.x, dy: d.y))
         case let .line(a, b): copy.shape = .line(m(a), m(b))
         case let .arrow(a, b): copy.shape = .arrow(m(a), m(b))
+        case let .polyline(points, arrow): copy.shape = .polyline(points.map(m), arrow: arrow)
         case let .pen(points): copy.shape = .pen(points.map(m))
         case let .highlighter(points): copy.shape = .highlighter(points.map(m))
         case let .mosaicBrush(points): copy.shape = .mosaicBrush(points.map(m))
@@ -290,6 +302,9 @@ extension AnnotationItem {
         case let (.line(a, b), .end): copy.shape = .line(a, CGPoint(x: b.x + d.x, y: b.y + d.y))
         case let (.arrow(a, b), .start): copy.shape = .arrow(CGPoint(x: a.x + d.x, y: a.y + d.y), b)
         case let (.arrow(a, b), .end): copy.shape = .arrow(a, CGPoint(x: b.x + d.x, y: b.y + d.y))
+        case (.polyline(var points, let arrow), let .vertex(i)) where points.indices.contains(i):
+            points[i] = CGPoint(x: points[i].x + d.x, y: points[i].y + d.y)
+            copy.shape = .polyline(points, arrow: arrow)
         default: break
         }
         return copy
@@ -299,6 +314,7 @@ extension AnnotationItem {
         switch shape {
         case let .rectangle(r), let .ellipse(r), let .mosaicRect(r): return r.width >= 3 && r.height >= 3
         case let .line(a, b), let .arrow(a, b): return hypot(a.x - b.x, a.y - b.y) >= 3
+        case let .polyline(points, _): return points.count >= 2 && zip(points, points.dropFirst()).contains { hypot($0.x - $1.x, $0.y - $1.y) >= 3 }
         case let .pen(points), let .highlighter(points): return points.count >= 2
         case let .mosaicBrush(points): return !points.isEmpty
         case let .text(text, _, _): return !text.isEmpty
@@ -423,6 +439,20 @@ struct ContentRenderer {
                 cg.addPath(path)
                 cg.fillPath()
             }
+        case let .polyline(points, arrow):
+            guard points.count >= 2 else { break }
+            var shaft = points
+            if arrow, let tip = points.last, let tail = points.dropLast().last(where: { hypot($0.x - tip.x, $0.y - tip.y) > 1 }) {
+                // End the stroke where the head starts, so the round cap doesn't poke out of the tip.
+                let length = hypot(tip.x - tail.x, tip.y - tail.y)
+                let head = min(AnnotationItem.arrowHeadLength(item.size), length * 0.6)
+                shaft[shaft.count - 1] = CGPoint(x: tip.x - (tip.x - tail.x) / length * head * 0.8,
+                                                 y: tip.y - (tip.y - tail.y) / length * head * 0.8)
+                cg.addPath(Self.arrowHeadPath(from: tail, to: tip, size: item.size))
+                cg.fillPath()
+            }
+            cg.addLines(between: shaft)
+            cg.strokePath()
         case let .pen(points):
             cg.addPath(Self.smoothPath(points))
             cg.strokePath()
@@ -482,6 +512,22 @@ struct ContentRenderer {
             path.addQuadCurve(to: mid, control: points[i])
         }
         path.addLine(to: points[points.count - 1])
+        return path
+    }
+
+    /// A plain triangular head at `tip`, pointing away from `tail`; used by polyline arrows whose shaft is a stroke.
+    static func arrowHeadPath(from tail: CGPoint, to tip: CGPoint, size: CGFloat) -> CGPath {
+        let dx = tip.x - tail.x, dy = tip.y - tail.y
+        let length = max(hypot(dx, dy), 0.001)
+        let ux = dx / length, uy = dy / length
+        let headLength = min(AnnotationItem.arrowHeadLength(size), length * 0.6)
+        let headHalf = min(AnnotationItem.arrowHeadWidth(size) / 2, headLength * 0.7)
+        let base = CGPoint(x: tip.x - ux * headLength, y: tip.y - uy * headLength)
+        let path = CGMutablePath()
+        path.move(to: tip)
+        path.addLine(to: CGPoint(x: base.x - uy * headHalf, y: base.y + ux * headHalf))
+        path.addLine(to: CGPoint(x: base.x + uy * headHalf, y: base.y - ux * headHalf))
+        path.closeSubpath()
         return path
     }
 

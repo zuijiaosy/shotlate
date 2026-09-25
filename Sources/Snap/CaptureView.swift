@@ -73,6 +73,8 @@ final class CaptureView: NSView {
     private var coalesceWork: DispatchWorkItem?
     private var scrollAccumulator: CGFloat = 0
     private var tool: Tool?
+    /// Corners placed so far while clicking out a polyline with the line or arrow tool.
+    private var polyPoints: [CGPoint]?
     private var textEditor: TextEditorView?
     private var editingID: UUID?
     private var editingColor = StyleMemory.color
@@ -444,6 +446,12 @@ final class CaptureView: NSView {
             return
         }
 
+        if let polyPoints {
+            updatePolylineDraft(polyPoints, cursor: p)
+            NSCursor.crosshair.set()
+            return
+        }
+
         let hovered = textEditor == nil ? hitItem(at: p)?.id : nil
         if hovered != hoveredID {
             let old = item(hoveredID)?.bounds ?? .null
@@ -489,6 +497,10 @@ final class CaptureView: NSView {
             return
         }
         if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        if polyPoints != nil {
+            addPolylinePoint(p, finish: event.clickCount >= 2, shift: event.modifierFlags.contains(.shift))
+            return
+        }
 
         guard hasSelection else {
             drag = .selecting(p)
@@ -609,7 +621,13 @@ final class CaptureView: NSView {
             magnifier.isHidden = true
             layoutChrome()
             needsDisplay = true
-        case .drawing:
+        case let .drawing(start):
+            if !didDrag, tool == .line || tool == .arrow {
+                // A click instead of a drag starts a polyline; each further click adds a corner.
+                polyPoints = [clampToSelection(start)]
+                updatePolylineDraft(polyPoints!, cursor: start)
+                return
+            }
             if let draft, draft.isMeaningful {
                 mutate { items.append(draft) }
                 selectedID = draft.id
@@ -625,7 +643,9 @@ final class CaptureView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        if textEditor != nil {
+        if polyPoints != nil {
+            finishPolyline()
+        } else if textEditor != nil {
             commitText()
         } else if !hasSelection {
             session?.cancel()
@@ -702,6 +722,7 @@ final class CaptureView: NSView {
     // MARK: - Drawing annotations
 
     private func setTool(_ newTool: Tool?) {
+        finishPolyline()
         commitText()
         tool = newTool
         select(nil)
@@ -794,10 +815,60 @@ final class CaptureView: NSView {
                 end = CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length)
             }
             if case .line = item.shape { item.shape = .line(start, end) } else { item.shape = .arrow(start, end) }
-        case .text, .number:
+        case .text, .number, .polyline:
             break
         }
         draft = item
+    }
+
+    // MARK: - Polyline
+
+    private func polylineEnd(from last: CGPoint?, to p: CGPoint, shift: Bool) -> CGPoint {
+        let p = clampToSelection(p)
+        guard shift, let last else { return p }
+        let angle = (atan2(p.y - last.y, p.x - last.x) / (.pi / 4)).rounded() * (.pi / 4)
+        let length = hypot(p.x - last.x, p.y - last.y)
+        return clampToSelection(CGPoint(x: last.x + cos(angle) * length, y: last.y + sin(angle) * length))
+    }
+
+    private func updatePolylineDraft(_ points: [CGPoint], cursor: CGPoint) {
+        let old = draft?.bounds ?? .null
+        let end = polylineEnd(from: points.last, to: cursor, shift: NSEvent.modifierFlags.contains(.shift))
+        draft = AnnotationItem(shape: .polyline(points + [end], arrow: tool == .arrow),
+                               color: StyleMemory.color, size: StyleMemory.size(for: tool ?? .line))
+        invalidate(old, draft?.bounds ?? .null, margin: 4 + (draft?.size ?? 0))
+    }
+
+    private func addPolylinePoint(_ p: CGPoint, finish: Bool, shift: Bool) {
+        guard var points = polyPoints else { return }
+        if finish {
+            finishPolyline()
+            return
+        }
+        points.append(polylineEnd(from: points.last, to: p, shift: shift))
+        polyPoints = points
+        updatePolylineDraft(points, cursor: p)
+    }
+
+    /// Commits the clicked-out corners (double-click, right-click, Return or Esc).
+    private func finishPolyline() {
+        guard var points = polyPoints else { return }
+        polyPoints = nil
+        // The double-click that ends a polyline also placed a corner on its first click; drop such repeats.
+        points = points.reduce(into: []) { result, p in
+            if let last = result.last, hypot(last.x - p.x, last.y - p.y) < 2 { return }
+            result.append(p)
+        }
+        let old = draft?.bounds ?? .null
+        draft = nil
+        let item = AnnotationItem(shape: .polyline(points, arrow: tool == .arrow), color: StyleMemory.color,
+                                  size: StyleMemory.size(for: tool ?? .line))
+        if item.isMeaningful {
+            mutate { items.append(item) }
+            selectedID = item.id
+        }
+        invalidate(old, item.bounds, margin: 16)
+        layoutChrome()
     }
 
     private func deleteSelectedItem() {
@@ -982,7 +1053,7 @@ final class CaptureView: NSView {
         }
 
         if code == 36 || code == 76 {
-            finish(.copy)
+            if polyPoints != nil { finishPolyline() } else { finish(.copy) }
             return
         }
         if code == 51 || code == 117 {
@@ -1029,7 +1100,9 @@ final class CaptureView: NSView {
 
     /// Esc steps back one level at a time; it only closes the capture when there is nothing left to back out of.
     private func handleEscape() {
-        if textEditor != nil {
+        if polyPoints != nil {
+            finishPolyline()
+        } else if textEditor != nil {
             commitText()
         } else if !ocrPanel.isHidden {
             closeOCRPanel()
