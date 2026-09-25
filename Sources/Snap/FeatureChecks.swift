@@ -45,6 +45,7 @@ enum FeatureChecks {
         ("automation", automation),
         ("hotkeys", hotkeys),
         ("magnifier", magnifierTool),
+        ("number-captions", numberCaptions),
         ("pin-filters", pinFilters),
         ("pin-multi", pinMulti),
         ("super-snip", superSnip),
@@ -1189,6 +1190,34 @@ enum FeatureChecks {
             expect(abs(moved.y - target.y - 150) < 0.5, "the lens can be moved on its own")
         }
         h.screenshot().map { write($0, "magnifier-overlay.png") }
+    }
+
+    @MainActor static func numberCaptions() async {
+        let h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 700, height: 400))
+        h.key("n", code: 45)
+        h.click(CGPoint(x: 100, y: 100))
+        guard let editor = h.window.firstResponder as? NSTextView else { return expect(false, "placing a number opens a caption editor") }
+        expect(editor.frame.minX > 100 + 12, "the caption starts right of the badge (\(editor.frame.minX))")
+        editor.insertText("登录", replacementRange: NSRange(location: NSNotFound, length: 0))
+        h.click(CGPoint(x: 100, y: 200))
+        let numbers = h.view.testing_items.filter { $0.tool == .number }
+        let captions = h.view.testing_items.filter { $0.captionOf != nil }
+        expect(numbers.count == 2 && captions.count == 1 && captions[0].captionOf == numbers[0].id,
+               "a click commits the caption and places the next number")
+        if case let .text(text, _, _)? = captions.first?.shape { expect(text == "登录", "the caption keeps what was typed") }
+        // The second number's caption is still empty: Delete removes the number instead.
+        h.key("", code: 51)
+        expect(h.view.testing_items.filter { $0.tool == .number }.count == 1, "Delete on an empty caption deletes its number")
+        guard let caption = captions.first, case let .text(_, before, _) = caption.shape else { return }
+        h.drag(CGPoint(x: 100, y: 100), CGPoint(x: 140, y: 130))
+        if case let .text(_, after, _)? = h.view.testing_items.first(where: { $0.id == caption.id })?.shape {
+            expect(after.x - before.x == 40 && after.y - before.y == 30, "the caption moves with its number")
+        }
+        h.key("", code: 51)
+        expect(h.view.testing_items.isEmpty, "deleting the number deletes its caption")
+        h.key("z", code: 6, flags: .command)
+        expect(h.view.testing_items.count == 2, "one undo brings both back")
     }
 
     @MainActor static func pinFilters() async {

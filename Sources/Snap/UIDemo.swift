@@ -94,9 +94,15 @@ enum UIDemo {
         drag(CGPoint(x: 100, y: 196), CGPoint(x: 300, y: 196))
         shot("mosaic-brush")
 
+        // A number opens a caption editor beside it; the next click places the next number.
         key("n", code: 45)
         click(CGPoint(x: 90, y: 110))
+        if let editor = window.firstResponder as? NSTextView {
+            editor.insertText("登录入口", replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
         click(CGPoint(x: 90, y: 250))
+        shot("number-caption")
+        key("\u{1b}", code: 53) // close the empty caption of number 2
         key("p", code: 35)
         drag(CGPoint(x: 460, y: 250), CGPoint(x: 660, y: 290))
 

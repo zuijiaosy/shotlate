@@ -159,6 +159,9 @@ final class MagnifierView: NSView {
 final class TextEditorView: NSTextView {
     var onCommit: () -> Void = {}
     var onResize: () -> Void = {}
+    /// Set for a number's caption: while it is still empty, shortcuts go to the capture view instead,
+    /// so Enter, Delete, arrows and ⌘ keys keep working right after placing a number.
+    var onEmptyShortcut: ((NSEvent) -> Void)?
     private(set) var wrapWidth: CGFloat
 
     init(origin: CGPoint, wrapWidth: CGFloat, color: NSColor, size: CGFloat) {
@@ -212,7 +215,21 @@ final class TextEditorView: NSTextView {
         onResize()
     }
 
+    private func passesThrough(_ event: NSEvent) -> Bool {
+        guard let onEmptyShortcut, string.isEmpty, !hasMarkedText() else { return false }
+        let shortcutKeys: Set<UInt16> = [36, 76, 51, 117, 123, 124, 125, 126]
+        guard event.modifierFlags.contains(.command) || shortcutKeys.contains(event.keyCode) else { return false }
+        onEmptyShortcut(event)
+        return true
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === self, event.type == .keyDown, passesThrough(event) { return true }
+        return super.performKeyEquivalent(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
+        if passesThrough(event) { return }
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if event.keyCode == 53 || ((event.keyCode == 36 || event.keyCode == 76) && flags == .command) {
             onCommit()

@@ -134,6 +134,8 @@ struct AnnotationItem: Equatable {
     var size: CGFloat
     var effect: MosaicEffect = .pixelate
     var style = ItemStyle()
+    /// For a caption typed right after placing a number: that number, which it moves and is deleted with.
+    var captionOf: UUID?
 
     var tool: Tool {
         switch shape {

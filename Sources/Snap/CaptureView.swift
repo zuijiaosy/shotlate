@@ -141,6 +141,7 @@ final class CaptureView: NSView {
     private var polyPoints: [CGPoint]?
     private var textEditor: TextEditorView?
     private var editingID: UUID?
+    private var editingCaptionOf: UUID?
     private var editingColor = StyleMemory.color(for: .text)
     private var editingSize = StyleMemory.size(for: .text)
     private var editingStyle = StyleMemory.style(for: .text)
@@ -526,6 +527,15 @@ final class CaptureView: NSView {
     private func replaceItem(_ item: AnnotationItem) {
         guard let i = items.firstIndex(where: { $0.id == item.id }) else { return }
         let old = items[i].bounds
+        if case let .number(from) = items[i].shape, case let .number(to) = item.shape, from != to {
+            // A number's captions follow it.
+            let d = CGPoint(x: to.x - from.x, y: to.y - from.y)
+            for j in items.indices where items[j].captionOf == item.id {
+                let before = items[j].bounds
+                items[j] = items[j].moved(by: d)
+                invalidate(before, items[j].bounds)
+            }
+        }
         items[i] = item
         invalidate(old, item.bounds, margin: max(14, item.size))
     }
@@ -698,9 +708,11 @@ final class CaptureView: NSView {
         let p = point(event)
         mouseDownPoint = p
         didDrag = false
-        if textEditor != nil {
+        if let editor = textEditor {
+            let captioning = editor.onEmptyShortcut != nil
             commitText()
-            return
+            // With the number tool, a click after a caption places the next number right away.
+            guard captioning, tool == .number else { return }
         }
         if window?.firstResponder !== self { window?.makeFirstResponder(self) }
         if polyPoints != nil {
@@ -1043,7 +1055,7 @@ final class CaptureView: NSView {
             mutate { items.append(item) }
             selectedID = item.id
             invalidate(item.bounds, margin: 16)
-            layoutChrome()
+            beginTextEditing(captioning: item)
         case .pen:
             draft = AnnotationItem(shape: .pen([p]), color: color, size: size, style: style)
             drag = .drawing(p)
@@ -1182,7 +1194,7 @@ final class CaptureView: NSView {
 
     private func deleteSelectedItem() {
         guard let id = selectedID else { return }
-        mutate { items.removeAll { $0.id == id } }
+        mutate { items.removeAll { $0.id == id || $0.captionOf == id } }
         selectedID = nil
         hoveredID = nil
         // Numbers after the deleted one shift down, so redraw everything.
@@ -1192,12 +1204,20 @@ final class CaptureView: NSView {
 
     // MARK: - Text
 
-    private func beginTextEditing(at p: CGPoint? = nil, existing: AnnotationItem? = nil) {
+    /// `captioning` opens an empty editor beside a just-placed number, so its explanation can be typed right away.
+    private func beginTextEditing(at p: CGPoint? = nil, existing: AnnotationItem? = nil, captioning number: AnnotationItem? = nil) {
         commitText()
         beginChange()
         var origin = p ?? .zero
         var text = ""
-        if let existing, case let .text(t, o, _) = existing.shape {
+        if let number, case let .number(c) = number.shape {
+            editingColor = number.color
+            editingSize = StyleMemory.size(for: .text)
+            editingStyle = StyleMemory.style(for: .text)
+            editingCaptionOf = number.id
+            let lineHeight = AnnotationItem.textSize("1", size: editingSize, width: 1000).height
+            origin = CGPoint(x: c.x + number.size / 2 + max(4, number.size * 0.25), y: c.y - lineHeight / 2)
+        } else if let existing, case let .text(t, o, _) = existing.shape {
             origin = o
             text = t
             editingColor = existing.color
@@ -1216,6 +1236,12 @@ final class CaptureView: NSView {
         editor.string = text
         editor.apply(color: editingColor, size: editingSize)
         editor.onCommit = { [unowned self] in self.commitText() }
+        if number != nil {
+            editor.onEmptyShortcut = { [unowned self] event in
+                self.commitText()
+                self.keyDown(with: event)
+            }
+        }
         editor.onResize = { [unowned self] in self.needsDisplay = true }
         addSubview(editor, positioned: .below, relativeTo: topBar)
         textEditor = editor
@@ -1241,11 +1267,13 @@ final class CaptureView: NSView {
                 selectedID = id
             }
         } else if !text.isEmpty {
-            let item = AnnotationItem(shape: shape, color: editingColor, size: editingSize, style: editingStyle)
+            var item = AnnotationItem(shape: shape, color: editingColor, size: editingSize, style: editingStyle)
+            item.captionOf = editingCaptionOf
             items.append(item)
             selectedID = item.id
         }
         editingID = nil
+        editingCaptionOf = nil
         editor.removeFromSuperview()
         endChange()
         window?.makeFirstResponder(self)
