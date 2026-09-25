@@ -195,6 +195,7 @@ final class CaptureView: NSView {
             addSubview(view)
         }
         magnifier.showHex = StyleMemory.hexColor
+        ocrPanel.onFormat = { [unowned self] in self.reformatOCR($0) }
         topBar.onSize = { [unowned self] in self.applyTypedSize($0) }
         topBar.onRatio = { [unowned self] in self.applyRatio($0) }
         topBar.onEndEditing = { [unowned self] in self.window?.makeFirstResponder(self) }
@@ -1486,6 +1487,7 @@ final class CaptureView: NSView {
         if shift, !shiftDown, !magnifier.isHidden, case .none = drag {
             StyleMemory.hexColor.toggle()
             magnifier.showHex = StyleMemory.hexColor
+        ocrPanel.onFormat = { [unowned self] in self.reformatOCR($0) }
         topBar.onSize = { [unowned self] in self.applyTypedSize($0) }
         topBar.onRatio = { [unowned self] in self.applyRatio($0) }
         topBar.onEndEditing = { [unowned self] in self.window?.makeFirstResponder(self) }
@@ -1701,9 +1703,12 @@ final class CaptureView: NSView {
                     showToast("没有识别到文字")
                     return
                 }
+                // Something laid out in rows and columns starts out as a Markdown table.
+                let table = StructuredText.table(result.lines).map(StructuredText.markdown)
+                let shown = table ?? text
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                ocrPanel.show(text: text, lineCount: result.lines.count + result.codes.count)
+                NSPasteboard.general.setString(shown, forType: .string)
+                ocrPanel.show(text: shown, lineCount: result.lines.count + result.codes.count, format: table == nil ? 0 : 1)
                 ocrPanel.isHidden = false
                 ocrBoxesVisible = true
                 invalidate(selection)
@@ -1747,6 +1752,28 @@ final class CaptureView: NSView {
             }
         }
     }
+
+    /// The OCR panel's 文本 / 表格 / 代码 switch.
+    private func reformatOCR(_ format: Int) {
+        guard let result = recognition?.result else { return }
+        switch format {
+        case 1:
+            guard let grid = StructuredText.table(result.lines) else {
+                showToast("没有识别出行列整齐的表格")
+                ocrPanel.formatControl.selectedSegment = 0
+                ocrPanel.replace(text: result.plainText)
+                return
+            }
+            ocrPanel.replace(text: StructuredText.markdown(grid))
+        case 2:
+            ocrPanel.replace(text: StructuredText.indented(result.lines))
+        default:
+            ocrPanel.replace(text: result.plainText)
+        }
+    }
+
+    var testing_ocrText: String? { ocrPanel.isHidden ? nil : ocrPanel.textView.string }
+    func testing_reformat(_ format: Int) { reformatOCR(format) }
 
     private func runTranslation() {
         switch translationState {

@@ -52,6 +52,7 @@ enum FeatureChecks {
         ("loupe", loupe),
         ("hot-corners", hotCorners),
         ("redact", redact),
+        ("ocr-structure", ocrStructure),
     ]
 
     @MainActor
@@ -1322,5 +1323,28 @@ enum FeatureChecks {
         expect(h.view.testing_items.isEmpty, "one ⌘Z removes all the boxes")
         h.key("z", code: 6, flags: [.command, .shift])
         h.export().map { write($0, "redact.png") }
+    }
+
+    @MainActor static func ocrStructure() async {
+        let gap = String(repeating: " ", count: 18)
+        let h = CaptureHarness(lines: ["Name\(gap)City\(gap)Score", "Alice\(gap)Paris\(gap)95", "Bob\(gap)  Tokyo\(gap)88"])
+        h.select(CGRect(x: 60, y: 60, width: 520, height: 110))
+        h.key("x", code: 7)
+        for _ in 0..<400 where h.view.testing_ocrText == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        let text = h.view.testing_ocrText ?? ""
+        print("OCR table output:\n\(text)")
+        expect(text.hasPrefix("| Name | City | Score |") && text.contains("| Alice | Paris | 95 |"), "a table on screen comes out as a Markdown table")
+        h.view.testing_reformat(0)
+        expect(!(h.view.testing_ocrText ?? "").contains("|"), "文本 switches back to plain lines")
+
+        let code = CaptureHarness(lines: ["func add(a: Int) -> Int {", "        return a + 1", "}"])
+        code.select(CGRect(x: 60, y: 60, width: 520, height: 110))
+        code.key("x", code: 7)
+        for _ in 0..<400 where code.view.testing_ocrText == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        code.view.testing_reformat(2)
+        let indented = code.view.testing_ocrText ?? ""
+        print("OCR code output:\n\(indented)")
+        let second = indented.split(separator: "\n").dropFirst().first.map(String.init) ?? ""
+        expect(second.hasPrefix("    ") && second.trimmingCharacters(in: .whitespaces).hasPrefix("return"), "代码 keeps the body indented")
     }
 }

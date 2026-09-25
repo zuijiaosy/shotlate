@@ -772,6 +772,9 @@ final class OCRPanelView: PanelView {
     private let copyButton = NSButton(title: "复制", target: nil, action: nil)
     private var closeButton: ChromeButton!
     private var resetWork: DispatchWorkItem?
+    /// 文本 / 表格 / 代码: how the recognized lines are put together.
+    let formatControl = NSSegmentedControl(labels: ["文本", "表格", "代码"], trackingMode: .selectOne, target: nil, action: nil)
+    var onFormat: ((Int) -> Void)?
 
     init(onClose: @escaping () -> Void) {
         textView = NSTextView(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
@@ -801,6 +804,15 @@ final class OCRPanelView: PanelView {
         scroll.frame = CGRect(x: 12, y: 38, width: 316, height: 178)
         addSubview(scroll)
 
+        formatControl.selectedSegment = 0
+        formatControl.controlSize = .small
+        formatControl.target = self
+        formatControl.action = #selector(formatChanged)
+        formatControl.toolTip = "表格：按行列整理成 Markdown 表格；代码：保留每行的缩进"
+        formatControl.sizeToFit()
+        formatControl.frame.origin = CGPoint(x: 12, y: 228)
+        addSubview(formatControl)
+
         copyButton.bezelStyle = .push
         copyButton.frame = CGRect(x: 340 - 12 - 90, y: 224, width: 90, height: 28)
         copyButton.target = self
@@ -810,10 +822,21 @@ final class OCRPanelView: PanelView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(text: String, lineCount: Int) {
+    func show(text: String, lineCount: Int, format: Int = 0) {
         textView.string = text
+        formatControl.selectedSegment = format
         title.stringValue = "识别结果 · \(lineCount) 行 · 已复制"
         flashCopied()
+    }
+
+    @objc private func formatChanged() {
+        onFormat?(formatControl.selectedSegment)
+    }
+
+    /// Replaces the text with another format of the same recognition and copies it.
+    func replace(text: String) {
+        textView.string = text
+        copyText()
     }
 
     @objc func copyText() {

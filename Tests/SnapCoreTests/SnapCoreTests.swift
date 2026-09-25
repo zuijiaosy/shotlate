@@ -640,3 +640,39 @@ import Testing
         #expect(kinds("版本 2.11.3 于 2026-01-18 发布") == [])
     }
 }
+
+@Suite struct StructuredTextTests {
+    func cell(_ t: String, _ x: CGFloat, _ y: CGFloat, w: CGFloat = 60) -> OCRLine { OCRLine(text: t, rect: CGRect(x: x, y: y, width: w, height: 16)) }
+
+    @Test func rebuildsATable() {
+        let lines = [
+            cell("姓名", 10, 10), cell("城市", 120, 11), cell("分数", 230, 10),
+            cell("张三", 10, 40), cell("北京", 121, 39), cell("95", 232, 40, w: 20),
+            cell("李四", 11, 70), cell("上海", 120, 70), cell("88", 231, 71, w: 20),
+        ]
+        let grid = StructuredText.table(lines)
+        #expect(grid == [["姓名", "城市", "分数"], ["张三", "北京", "95"], ["李四", "上海", "88"]])
+        #expect(StructuredText.markdown(grid!) == "| 姓名 | 城市 | 分数 |\n| --- | --- | --- |\n| 张三 | 北京 | 95 |\n| 李四 | 上海 | 88 |")
+    }
+
+    @Test func emptyCellsStayInTheirColumn() {
+        let lines = [cell("a", 10, 10), cell("b", 120, 10), cell("c", 230, 10),
+                     cell("d", 10, 40), cell("f", 230, 40),
+                     cell("g", 10, 70), cell("h", 120, 70), cell("i", 230, 70)]
+        #expect(StructuredText.table(lines)?[1] == ["d", "", "f"])
+    }
+
+    @Test func proseIsNotATable() {
+        let lines = [OCRLine(text: "A paragraph of text that wraps", rect: CGRect(x: 10, y: 10, width: 300, height: 16)),
+                     OCRLine(text: "onto a second line.", rect: CGRect(x: 10, y: 30, width: 180, height: 16))]
+        #expect(StructuredText.table(lines) == nil)
+    }
+
+    @Test func keepsIndentation() {
+        // 10pt per character.
+        let lines = [OCRLine(text: "func f() {", rect: CGRect(x: 20, y: 10, width: 100, height: 14)),
+                     OCRLine(text: "return 1", rect: CGRect(x: 60, y: 30, width: 80, height: 14)),
+                     OCRLine(text: "}", rect: CGRect(x: 20, y: 50, width: 10, height: 14))]
+        #expect(StructuredText.indented(lines) == "func f() {\n    return 1\n}")
+    }
+}
