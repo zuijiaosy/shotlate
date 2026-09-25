@@ -8,6 +8,8 @@ final class PinManager {
 
     private(set) var pins: [PinWindow] = []
     private var history: [(rep: NSBitmapImageRep, frame: CGRect)] = []
+    /// Hidden pins stay open and don't count as closed, so they are not pushed into the restore history.
+    private(set) var isHidingAll = false
 
     var hasHistory: Bool { !history.isEmpty }
     var hasPins: Bool { !pins.isEmpty }
@@ -16,6 +18,8 @@ final class PinManager {
     /// Shows `rep` as a floating pin; `frame` is in global screen coordinates at 100% zoom.
     @discardableResult
     func pin(_ rep: NSBitmapImageRep, frame: CGRect) -> PinWindow {
+        // A new pin while the others are hidden brings them back, so nothing is left hidden by surprise.
+        if isHidingAll { showAll() }
         let window = PinWindow(rep: rep, frame: frame)
         pins.append(window)
         window.orderFrontRegardless()
@@ -53,6 +57,27 @@ final class PinManager {
 
     func closeAll() {
         for pin in pins { pin.close(keepInHistory: true) }
+        isHidingAll = false
+    }
+
+    /// Hides every pin, or shows them again if they are hidden.
+    func toggleHidden() {
+        if isHidingAll {
+            showAll()
+        } else {
+            guard hasPins else {
+                HUD.show("当前没有贴图")
+                return
+            }
+            for pin in pins { pin.orderOut(nil) }
+            isHidingAll = true
+            HUD.show("已隐藏 \(pins.count) 张贴图，再按一次显示")
+        }
+    }
+
+    private func showAll() {
+        isHidingAll = false
+        for pin in pins { pin.orderFrontRegardless() }
     }
 
     func disablePassthrough() {

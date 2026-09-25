@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var pinClipboardItem: NSMenuItem!
     private var restorePinItem: NSMenuItem!
     private var closePinsItem: NSMenuItem!
+    private var togglePinsItem: NSMenuItem!
     private var passthroughItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -25,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(pinClipboardItem)
         restorePinItem = item("恢复关闭的贴图", #selector(restorePin))
         menu.addItem(restorePinItem)
+        togglePinsItem = item("隐藏全部贴图", #selector(togglePins))
+        menu.addItem(togglePinsItem)
         closePinsItem = item("关闭全部贴图", #selector(closePins))
         menu.addItem(closePinsItem)
         passthroughItem = item("取消贴图的鼠标穿透", #selector(disablePassthrough))
@@ -67,12 +70,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             pinClipboardItem.title = "从剪贴板贴图"
         }
+
+        let toggle = settings.togglePinsShortcut
+        let toggleOK = HotKeyCenter.shared.register(.togglePins, shortcut: toggle) { PinManager.shared.toggleHidden() }
+        togglePinsShortcutLabel = toggle.map { toggleOK ? "（\($0.displayString)）" : "（快捷键 \($0.displayString) 已被占用）" } ?? ""
     }
+
+    private var togglePinsShortcutLabel = ""
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         let pins = PinManager.shared
         restorePinItem.isEnabled = pins.hasHistory
         closePinsItem.isEnabled = pins.hasPins
+        togglePinsItem.isEnabled = pins.hasPins
+        togglePinsItem.title = (pins.isHidingAll ? "显示全部贴图" : "隐藏全部贴图") + togglePinsShortcutLabel
         passthroughItem.isHidden = !pins.hasPassthrough
     }
 
@@ -84,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func pinClipboard() { PinManager.shared.pinClipboard() }
     @objc private func restorePin() { PinManager.shared.restoreLast() }
     @objc private func closePins() { PinManager.shared.closeAll() }
+    @objc private func togglePins() { PinManager.shared.toggleHidden() }
     @objc private func disablePassthrough() { PinManager.shared.disablePassthrough() }
 
     @objc private func openSettings() {

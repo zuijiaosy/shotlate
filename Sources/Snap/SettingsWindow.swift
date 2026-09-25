@@ -3,7 +3,7 @@ import ServiceManagement
 import SnapCore
 import SwiftUI
 
-enum ShortcutTarget { case capture, pinClipboard }
+enum ShortcutTarget { case capture, pinClipboard, togglePins }
 
 final class SettingsModel: ObservableObject {
     @Published var baseURL = Settings.shared.baseURL
@@ -14,6 +14,7 @@ final class SettingsModel: ObservableObject {
     @Published var imageFormat = Settings.shared.imageFormat
     @Published var shortcut = Settings.shared.shortcut
     @Published var pinShortcut = Settings.shared.pinClipboardShortcut
+    @Published var togglePinsShortcut = Settings.shared.togglePinsShortcut
     @Published var recording: ShortcutTarget?
     @Published var playSound = Settings.shared.playSound
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -38,6 +39,7 @@ final class SettingsModel: ObservableObject {
         s.imageFormat = imageFormat
         s.shortcut = shortcut
         s.pinClipboardShortcut = pinShortcut
+        s.togglePinsShortcut = togglePinsShortcut
         s.playSound = playSound
         applyLaunchAtLogin()
         NotificationCenter.default.post(name: Settings.didChange, object: nil)
@@ -107,6 +109,7 @@ final class SettingsModel: ObservableObject {
                 switch self.recording {
                 case .capture: self.shortcut = shortcut
                 case .pinClipboard: self.pinShortcut = shortcut
+                case .togglePins: self.togglePinsShortcut = shortcut
                 case nil: break
                 }
                 self.stopRecordingShortcut()
@@ -131,6 +134,20 @@ extension Notification.Name {
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
 
+    /// A shortcut that can be cleared.
+    private func optionalShortcutRow(_ title: String, _ target: ShortcutTarget, _ value: Binding<Shortcut?>) -> some View {
+        LabeledContent(title) {
+            HStack {
+                Button(model.recording == target ? "请按下新的组合键…（Esc 取消）" : value.wrappedValue?.displayString ?? "未设置") {
+                    model.recording == target ? model.stopRecordingShortcut() : model.startRecording(target)
+                }
+                if value.wrappedValue != nil {
+                    Button("清除") { value.wrappedValue = nil }
+                }
+            }
+        }
+    }
+
     var body: some View {
         Form {
             Section("截图") {
@@ -139,16 +156,8 @@ struct SettingsView: View {
                         model.recording == .capture ? model.stopRecordingShortcut() : model.startRecording(.capture)
                     }
                 }
-                LabeledContent("从剪贴板贴图") {
-                    HStack {
-                        Button(model.recording == .pinClipboard ? "请按下新的组合键…（Esc 取消）" : model.pinShortcut?.displayString ?? "未设置") {
-                            model.recording == .pinClipboard ? model.stopRecordingShortcut() : model.startRecording(.pinClipboard)
-                        }
-                        if model.pinShortcut != nil {
-                            Button("清除") { model.pinShortcut = nil }
-                        }
-                    }
-                }
+                optionalShortcutRow("从剪贴板贴图", .pinClipboard, $model.pinShortcut)
+                optionalShortcutRow("隐藏 / 显示全部贴图", .togglePins, $model.togglePinsShortcut)
                 LabeledContent("保存位置") {
                     HStack {
                         Text(model.saveDirectory.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))

@@ -7,6 +7,7 @@ final class HotKeyCenter {
     enum Action: UInt32 {
         case capture = 1
         case pinClipboard = 2
+        case togglePins = 3
     }
 
     static let shared = HotKeyCenter()

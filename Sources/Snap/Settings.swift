@@ -11,6 +11,7 @@ struct Shortcut: Codable, Equatable {
 
     static let `default` = Shortcut(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: UInt32(optionKey), keyLabel: "A")
     static let defaultPinClipboard = Shortcut(keyCode: UInt32(kVK_ANSI_V), carbonModifiers: UInt32(optionKey | shiftKey), keyLabel: "V")
+    static let defaultTogglePins = Shortcut(keyCode: UInt32(kVK_ANSI_H), carbonModifiers: UInt32(optionKey | shiftKey), keyLabel: "H")
 
     init(keyCode: UInt32, carbonModifiers: UInt32, keyLabel: String) {
         self.keyCode = keyCode
@@ -124,11 +125,23 @@ final class Settings {
 
     /// nil means the user cleared the shortcut.
     var pinClipboardShortcut: Shortcut? {
-        get {
-            guard let data = defaults.data(forKey: "pin.shortcut") else { return .defaultPinClipboard }
-            return try? JSONDecoder().decode(Shortcut.self, from: data)
-        }
-        set { defaults.set(newValue.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: "pin.shortcut") }
+        get { optionalShortcut("pin.shortcut", default: .defaultPinClipboard) }
+        set { setOptionalShortcut(newValue, "pin.shortcut") }
+    }
+
+    var togglePinsShortcut: Shortcut? {
+        get { optionalShortcut("pin.toggleShortcut", default: .defaultTogglePins) }
+        set { setOptionalShortcut(newValue, "pin.toggleShortcut") }
+    }
+
+    /// A missing key means "never set", which gets the default; empty data means the user cleared it.
+    private func optionalShortcut(_ key: String, default value: Shortcut) -> Shortcut? {
+        guard let data = defaults.data(forKey: key) else { return value }
+        return try? JSONDecoder().decode(Shortcut.self, from: data)
+    }
+
+    private func setOptionalShortcut(_ shortcut: Shortcut?, _ key: String) {
+        defaults.set(shortcut.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: key)
     }
 
     var playSound: Bool {

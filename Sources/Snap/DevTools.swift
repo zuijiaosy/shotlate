@@ -20,6 +20,14 @@ enum DevTools {
             }
             app.run()
         }
+        if args.count >= 3, args[1] == "--check" {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            Task { @MainActor in
+                exit(await FeatureChecks.run(args[2], output: args.count >= 4 ? URL(fileURLWithPath: args[3]) : nil))
+            }
+            app.run()
+        }
         if args.count >= 4, args[1] == "--stitch-diagnose" {
             func load(_ path: String) -> PixelBuffer? {
                 guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
