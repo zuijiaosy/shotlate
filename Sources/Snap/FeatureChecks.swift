@@ -15,6 +15,7 @@ enum FeatureChecks {
 
     @MainActor static let checks: [(String, @MainActor () async -> Void)] = [
         ("pins-hide", pinsHide),
+        ("pin-keys", pinKeys),
     ]
 
     @MainActor
@@ -69,5 +70,29 @@ enum FeatureChecks {
         expect(!manager.isHidingAll && a.isVisible && c.isVisible, "a new pin while hidden brings the others back")
         manager.closeAll()
         expect(!manager.hasPins, "close all empties the list")
+    }
+
+    @MainActor static func key(_ window: NSWindow, _ chars: String, code: UInt16, flags: NSEvent.ModifierFlags = []) {
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                                     windowNumber: window.windowNumber, context: nil, characters: chars,
+                                     charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)!
+        window.keyDown(with: event)
+    }
+
+    @MainActor static func pinKeys() async {
+        let manager = PinManager.shared
+        let pin = manager.pin(sampleRep(CGSize(width: 120, height: 80)), frame: CGRect(x: -4000, y: -4000, width: 120, height: 80))
+        key(pin, "1", code: 18)
+        expect(pin.rep.size == CGSize(width: 80, height: 120), "1 rotates clockwise (size \(pin.rep.size))")
+        key(pin, "2", code: 19)
+        expect(pin.rep.size == CGSize(width: 120, height: 80), "2 rotates back")
+        key(pin, "=", code: 24)
+        expect(abs(pin.zoom - 1.1) < 0.001, "= zooms in (zoom \(pin.zoom))")
+        key(pin, "-", code: 27)
+        expect(abs(pin.zoom - 1) < 0.001, "- zooms out")
+        let before = manager.hasHistory
+        key(pin, "\u{1b}", code: 53, flags: .shift)
+        expect(!manager.pins.contains { $0 === pin }, "⇧Esc closes the pin")
+        expect(manager.hasHistory == before, "⇧Esc does not keep it for restore")
     }
 }

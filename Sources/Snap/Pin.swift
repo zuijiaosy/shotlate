@@ -178,8 +178,16 @@ final class PinWindow: NSPanel {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
         let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
         let arrows: [UInt16: CGPoint] = [123: CGPoint(x: -1, y: 0), 124: CGPoint(x: 1, y: 0), 125: CGPoint(x: 0, y: -1), 126: CGPoint(x: 0, y: 1)]
-        if event.keyCode == 53 || (flags == .command && key == "w") {
+        if event.keyCode == 53 && flags == .shift {
+            destroy()
+        } else if event.keyCode == 53 || (flags == .command && key == "w") {
             close(keepInHistory: true)
+        } else if flags.isEmpty, let action = Self.digitActions[key] {
+            action(self)()
+        } else if flags.subtracting(.shift).isEmpty, key == "=" || key == "+" {
+            setZoom(zoom * 1.1)
+        } else if flags.isEmpty, key == "-" {
+            setZoom(zoom / 1.1)
         } else if flags == .command && key == "c" {
             copyImage()
         } else if flags == .command && key == "s" {
@@ -197,6 +205,11 @@ final class PinWindow: NSPanel {
     override func cancelOperation(_ sender: Any?) {
         close(keepInHistory: true)
     }
+
+    /// Same number keys as Snipaste: 1/2 rotate clockwise/counter-clockwise, 3/4 flip horizontally/vertically.
+    private static let digitActions: [String: (PinWindow) -> () -> Void] = [
+        "1": { $0.rotateRight }, "2": { $0.rotateLeft }, "3": { $0.flipHorizontal }, "4": { $0.flipVertical },
+    ]
 
     // MARK: Actions
 
@@ -249,6 +262,9 @@ final class PinWindow: NSPanel {
     }
 
     @objc func closeFromMenu() { close(keepInHistory: true) }
+
+    /// Closes without keeping a copy to restore.
+    @objc func destroy() { close(keepInHistory: false) }
     @objc func closeAllFromMenu() { PinManager.shared.closeAll() }
 
     func setPassthrough(_ on: Bool) {
@@ -331,10 +347,11 @@ final class PinWindow: NSPanel {
         opacityItem.submenu = opacityMenu
         menu.addItem(opacityItem)
 
-        menu.addItem(item("向左旋转", #selector(rotateLeft)))
-        menu.addItem(item("向右旋转", #selector(rotateRight)))
-        menu.addItem(item("水平翻转", #selector(flipHorizontal)))
-        menu.addItem(item("垂直翻转", #selector(flipVertical)))
+        menu.addItem(item("向右旋转", #selector(rotateRight), "1"))
+        menu.addItem(item("向左旋转", #selector(rotateLeft), "2"))
+        menu.addItem(item("水平翻转", #selector(flipHorizontal), "3"))
+        menu.addItem(item("垂直翻转", #selector(flipVertical), "4"))
+        for i in menu.items.suffix(4) { i.keyEquivalentModifierMask = [] }
         menu.addItem(.separator())
         let passthrough = item("鼠标穿透", #selector(togglePassthrough))
         passthrough.state = ignoresMouseEvents ? .on : .off
@@ -344,6 +361,9 @@ final class PinWindow: NSPanel {
         menu.addItem(floating)
         menu.addItem(.separator())
         menu.addItem(item("关闭", #selector(closeFromMenu), "w"))
+        let destroyItem = item("销毁（不可恢复）", #selector(destroy), "\u{1b}")
+        destroyItem.keyEquivalentModifierMask = .shift
+        menu.addItem(destroyItem)
         menu.addItem(item("关闭全部贴图", #selector(closeAllFromMenu)))
         return menu
     }
