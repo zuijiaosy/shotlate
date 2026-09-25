@@ -58,6 +58,9 @@ final class CaptureSession {
     private var historyIndex = -1
     private var historyScreen: Int?
     var history = CaptureHistory.shared
+    /// Grabs the screens as they are now; replaceable for tests.
+    var liveCapture: () async throws -> [CGDirectDisplayID: CGImage] = CaptureSession.captureByDisplay
+    private(set) var isFinished = false
 
     /// `replay` opens straight into the most recent capture from history.
     static func begin(replay: Bool = false) {
@@ -105,20 +108,61 @@ final class CaptureSession {
         }
     }
 
+    // MARK: Boards
+
+    /// A whiteboard (solid canvas) or transparent board over the live screen, on the screen with the pointer.
+    static func beginBoard(transparent: Bool, color: NSColor = .white) {
+        guard current == nil, !isStarting else { return }
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main else { return }
+        if transparent, !CaptureEngine.hasPermission {
+            // Exporting a transparent board needs a screenshot of what is under it.
+            requestPermission()
+            return
+        }
+        let session = CaptureSession(previousApp: NSWorkspace.shared.frontmostApplication)
+        let image = boardImage(size: screen.frame.size, scale: screen.backingScaleFactor, color: transparent ? .clear : color)
+        let window = OverlayWindow(screen: screen)
+        if transparent {
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            // Clear pixels would otherwise let clicks fall through to the apps below.
+            window.ignoresMouseEvents = false
+        }
+        let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+        session.install(window: window, image: image, displayID: displayID, mode: transparent ? .transparentBoard : .whiteboard)
+        current = session
+        session.show()
+        session.views.first?.startBoard()
+    }
+
+    static func boardImage(size: CGSize, scale: CGFloat, color: NSColor) -> CGImage {
+        let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(color.usingColorSpace(.sRGB)?.cgColor ?? CGColor(gray: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
+        return ctx.makeImage()!
+    }
+
+    private func install(window: OverlayWindow, image: CGImage, displayID: CGDirectDisplayID, mode: CaptureMode) {
+        let local = CGRect(origin: .zero, size: window.frame.size)
+        let view = CaptureView(frame: local, snapshot: image, windowRects: [], displayID: displayID, mode: mode)
+        view.session = self
+        window.contentView = CaptureRootView(frame: local, snapshot: image, captureView: view)
+        windows = [window]
+        views = [view]
+        liveSnapshots = [image]
+        liveWindowRects = [[]]
+    }
+
     /// An offscreen session over `image`, for scripted checks; nothing is shown on the real screens.
-    static func makeForTesting(image: CGImage, size: CGSize, history: CaptureHistory) -> CaptureSession {
+    static func makeForTesting(image: CGImage, size: CGSize, history: CaptureHistory, mode: CaptureMode = .screenshot) -> CaptureSession {
         let session = CaptureSession(previousApp: nil)
         session.history = history
         let window = OverlayWindow(screen: NSScreen.screens[0])
         window.setFrame(CGRect(x: -9000, y: -9000, width: size.width, height: size.height), display: false)
-        let local = CGRect(origin: .zero, size: size)
-        let view = CaptureView(frame: local, snapshot: image, windowRects: [], displayID: 0)
-        view.session = session
-        window.contentView = CaptureRootView(frame: local, snapshot: image, captureView: view)
-        session.windows = [window]
-        session.views = [view]
-        session.liveSnapshots = [image]
-        session.liveWindowRects = [[]]
+        session.install(window: window, image: image, displayID: 0, mode: mode)
+        session.views[0].startBoard()
         return session
     }
 
@@ -333,6 +377,7 @@ final class CaptureSession {
     }
 
     func finish() {
+        isFinished = true
         for view in views { view.tearDown() }
         for window in windows {
             window.orderOut(nil)

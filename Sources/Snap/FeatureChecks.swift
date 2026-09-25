@@ -36,6 +36,7 @@ enum FeatureChecks {
         ("refresh", refreshCapture),
         ("scan-code", scanCode),
         ("share", shareFile),
+        ("boards", boards),
     ]
 
     @MainActor
@@ -830,5 +831,66 @@ enum FeatureChecks {
         let toolbar = ToolbarView { _ in }
         expect(toolbar.subviews.first.map { $0.subviews.contains { ($0 as? NSButton)?.toolTip?.hasPrefix("分享") == true } } ?? false,
                "the capture toolbar has a share button")
+    }
+
+    @MainActor static func boards() async {
+        let size = CGSize(width: 600, height: 400)
+        let history = CaptureHistory(directory: outputDirectory.appendingPathComponent("board-history", isDirectory: true))
+        StyleMemory.setColor(StyleState.palette[0], for: .pen)
+        func drive(_ view: CaptureView) -> (([CGPoint]) -> Void, (String, UInt16) -> Void) {
+            func mouse(_ type: NSEvent.EventType, _ p: CGPoint) -> NSEvent {
+                NSEvent.mouseEvent(with: type, location: view.convert(p, to: nil), modifierFlags: [], timestamp: 0,
+                                   windowNumber: view.window!.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+            }
+            let stroke: ([CGPoint]) -> Void = { points in
+                view.mouseDown(with: mouse(.leftMouseDown, points[0]))
+                for p in points.dropFirst() { view.mouseDragged(with: mouse(.leftMouseDragged, p)) }
+                view.mouseUp(with: mouse(.leftMouseUp, points.last!))
+            }
+            let key: (String, UInt16) -> Void = { chars, code in
+                view.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                                    characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code)!)
+            }
+            return (stroke, key)
+        }
+
+        let white = CaptureSession.boardImage(size: size, scale: 2, color: .white)
+        let board = CaptureSession.makeForTesting(image: white, size: size, history: history, mode: .whiteboard)
+        let view = board.testing_views[0]
+        expect(view.testing_selection == CGRect(origin: .zero, size: size), "the whole screen is the canvas")
+        let (stroke, key) = drive(view)
+        stroke((0...10).map { CGPoint(x: 100 + CGFloat($0) * 30, y: 200) })
+        expect(view.testing_items.count == 1, "the pen is ready without choosing a tool")
+        if let rep = view.exportImage(format: .png) {
+            write(rep, "whiteboard.png")
+            expect(rep.size == size, "export is the full board without shadow padding (\(rep.size))")
+            let ink = rep.color(atPoint: CGPoint(x: 250, y: 200))!, paper = rep.color(atPoint: CGPoint(x: 250, y: 300))!
+            expect(ink.redComponent > 0.8 && ink.greenComponent < 0.4 && paper.blueComponent > 0.95, "red ink on white paper")
+        }
+        key("\u{1b}", 53) // deselects the stroke just drawn
+        key("\u{1b}", 53)
+        expect(!board.isFinished, "one Esc with nothing selected does not close the board")
+        key(" ", 49)
+        expect(view.subviews.contains { $0 is ToolbarView && $0.isHidden }, "space hides the toolbar")
+        key("\u{1b}", 53)
+        expect(board.isFinished, "a second Esc right after closes it")
+
+        let clear = CaptureSession.boardImage(size: size, scale: 2, color: .clear)
+        let glass = CaptureSession.makeForTesting(image: clear, size: size, history: history, mode: .transparentBoard)
+        let live = sampleRep(size, color: .systemGreen).cgImage!
+        glass.liveCapture = { [0: live] }
+        let glassView = glass.testing_views[0]
+        let (glassStroke, glassKey) = drive(glassView)
+        glassStroke((0...10).map { CGPoint(x: 100 + CGFloat($0) * 30, y: 200) })
+        let before = NSPasteboard.general.changeCount
+        glassKey("\r", 36)
+        for _ in 0..<100 where !glass.isFinished { try? await Task.sleep(for: .milliseconds(20)) }
+        expect(glass.isFinished && NSPasteboard.general.changeCount != before, "Return on a transparent board copies after grabbing the screen")
+        if let image = NSPasteboard.general.readObjects(forClasses: [NSImage.self])?.first as? NSImage,
+           let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+            let ink = rep.color(atPoint: CGPoint(x: 250, y: 200))!, screen = rep.color(atPoint: CGPoint(x: 250, y: 300))!
+            expect(ink.redComponent > 0.8 && screen.greenComponent > 0.6 && screen.redComponent < 0.5, "the drawing is composited onto the live screen")
+            write(rep, "transparent-board.png")
+        }
     }
 }

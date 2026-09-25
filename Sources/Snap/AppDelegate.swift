@@ -41,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(replayItem)
         scanItem = item("扫描屏幕上的二维码 / 条形码", #selector(scanCodes))
         menu.addItem(scanItem)
+        menu.addItem(item("白板", #selector(whiteboard)))
+        menu.addItem(item("透明白板（在屏幕上画）", #selector(transparentBoard)))
         menu.addItem(.separator())
         pinClipboardItem = item("从剪贴板贴图", #selector(pinClipboard))
         menu.addItem(pinClipboardItem)
@@ -204,6 +206,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? nil : name
+    }
+
+    @objc private func whiteboard() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { CaptureSession.beginBoard(transparent: false) }
+    }
+
+    @objc private func transparentBoard() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { CaptureSession.beginBoard(transparent: true) }
     }
 
     @objc private func scanCodes() {

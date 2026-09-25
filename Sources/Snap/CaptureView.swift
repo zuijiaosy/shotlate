@@ -79,6 +79,15 @@ private enum TranslationState {
 
 enum OutputAction { case copy, save, saveAs }
 
+/// A normal screenshot, a whiteboard (drawing on a solid canvas), or a transparent board over the live screen.
+enum CaptureMode: Equatable {
+    case screenshot
+    case whiteboard
+    case transparentBoard
+
+    var isBoard: Bool { self != .screenshot }
+}
+
 /// Transparent overlay for one display: dimming, selection, annotations, magnifier and toolbar.
 /// The frozen screenshot itself is a layer underneath (see `CaptureRootView`), so this view never redraws it.
 final class CaptureView: NSView {
@@ -160,7 +169,13 @@ final class CaptureView: NSView {
     private let capturedCursor: CapturedCursor?
     private var showsCursor = Settings.shared.captureCursor
 
-    init(frame: CGRect, snapshot: CGImage, windowRects: [CGRect], displayID: CGDirectDisplayID, cursor: CapturedCursor? = nil) {
+    let mode: CaptureMode
+    /// In a board, Esc has to be pressed twice in a row to leave, so a stray Esc doesn't wipe the drawing.
+    private var escapeArmed = false
+
+    init(frame: CGRect, snapshot: CGImage, windowRects: [CGRect], displayID: CGDirectDisplayID, cursor: CapturedCursor? = nil,
+         mode: CaptureMode = .screenshot) {
+        self.mode = mode
         self.capturedCursor = cursor
         self.snapshot = snapshot
         self.baseImage = NSImage(cgImage: snapshot, size: frame.size)
@@ -264,7 +279,25 @@ final class CaptureView: NSView {
         return []
     }
 
+    /// Boards start with the whole screen selected and the pen in hand.
+    func startBoard() {
+        guard mode.isBoard else { return }
+        selection = bounds
+        commitSelection()
+        setTool(.pen)
+        showToast(mode == .whiteboard ? "白板：直接画 · 空格显示/隐藏工具栏 · 连按两次 Esc 退出"
+                                      : "透明白板：在屏幕上直接画 · 空格显示/隐藏工具栏 · 连按两次 Esc 退出", duration: 3)
+    }
+
+    private var toolbarHiddenByUser = false
+
     override func draw(_ dirtyRect: NSRect) {
+        if mode.isBoard {
+            // No dimming, border or handles: the whole screen is the canvas.
+            renderer.drawOverlays(items: items, draft: draft, hiddenID: editingID, translation: [])
+            drawItemDecorations()
+            return
+        }
         let focus = focusRect
         let dim = NSBezierPath(rect: bounds)
         if let focus {
@@ -623,7 +656,7 @@ final class CaptureView: NSView {
             drag = .resizingItem(handle, item, p)
             return
         }
-        if hit == nil, let handle = selectionHandle(at: p) {
+        if hit == nil, !mode.isBoard, let handle = selectionHandle(at: p) {
             drag = .resizing(handle, selection, p)
             return
         }
@@ -637,7 +670,7 @@ final class CaptureView: NSView {
         select(nil)
         if let tool, selection.contains(p) {
             beginAnnotation(tool, at: p)
-        } else if selection.contains(p) {
+        } else if selection.contains(p), !mode.isBoard {
             drag = .moving(p, selection)
             NSCursor.closedHand.set()
         } else if items.isEmpty, case .none = translationState {
@@ -761,6 +794,8 @@ final class CaptureView: NSView {
             session?.cancel()
         } else if selectedID != nil {
             select(nil)
+        } else if mode.isBoard {
+            return
         } else if tool != nil {
             setTool(nil)
         } else if items.isEmpty, case .none = translationState {
@@ -1236,6 +1271,11 @@ final class CaptureView: NSView {
             session?.refresh(from: self)
             return
         }
+        if mode.isBoard, flags.isEmpty, key == " " {
+            toolbarHiddenByUser.toggle()
+            layoutChrome()
+            return
+        }
         if flags.isEmpty, key == "`" {
             toggleCursor()
             return
@@ -1310,6 +1350,16 @@ final class CaptureView: NSView {
 
     /// Esc steps back one level at a time; it only closes the capture when there is nothing left to back out of.
     private func handleEscape() {
+        if mode.isBoard, polyPoints == nil, textEditor == nil, selectedID == nil {
+            if escapeArmed {
+                session?.cancel()
+            } else {
+                escapeArmed = true
+                showToast("再按一次 Esc 退出白板", duration: 1.5)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.escapeArmed = false }
+            }
+            return
+        }
         if polyPoints != nil {
             finishPolyline()
         } else if textEditor != nil {
@@ -1414,7 +1464,8 @@ final class CaptureView: NSView {
             topBar.setFrameOrigin(top)
         }
 
-        toolbar.isHidden = !hasSelection || isAdjustingSelection
+        if mode.isBoard { topBar.isHidden = true }
+        toolbar.isHidden = !hasSelection || isAdjustingSelection || toolbarHiddenByUser
         if !hasSelection { ocrPanel.isHidden = true }
         let style = currentStyle
         styleBar.isHidden = toolbar.isHidden || style == nil
@@ -1659,8 +1710,15 @@ final class CaptureView: NSView {
     // MARK: - Output
 
     /// The image that copy/save would produce right now.
-    func exportImage(format: ImageFormat, shadow: Bool? = nil) -> NSBitmapImageRep? {
-        let options = ExportOptions(cornerRadius: cornerRadius, shadow: shadow ?? shadowEnabled, format: format)
+    /// `base` replaces the frozen screen, for a transparent board exported over what is on screen now.
+    func exportImage(format: ImageFormat, shadow: Bool? = nil, base: CGImage? = nil) -> NSBitmapImageRep? {
+        // Boards are full-screen pictures: no rounded corners or drop shadow.
+        let options = ExportOptions(cornerRadius: mode.isBoard ? 0 : cornerRadius, shadow: mode.isBoard ? false : shadow ?? shadowEnabled,
+                                    format: format)
+        var renderer = self.renderer
+        if let base {
+            renderer = ContentRenderer(base: NSImage(cgImage: base, size: bounds.size), bounds: bounds, effect: { _ in NSImage(cgImage: base, size: self.bounds.size) })
+        }
         return Exporter.render(renderer: renderer, selection: selection, scale: scale,
                                items: items, translation: visibleTranslation, options: options)
     }
@@ -1710,22 +1768,34 @@ final class CaptureView: NSView {
     }
 
     /// With auto-save on, copying or pinning also writes the file. Returns the short path, or nil when off or failed.
-    private func autoSaveIfEnabled() -> String? {
+    private func autoSaveIfEnabled(base: CGImage? = nil) -> String? {
         let settings = Settings.shared
-        guard settings.autoSave, let rep = exportImage(format: settings.imageFormat),
+        guard settings.autoSave, let rep = exportImage(format: settings.imageFormat, base: base),
               let url = try? Exporter.save(rep, format: settings.imageFormat, directory: settings.saveDirectory)
         else { return nil }
         return url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 
-    private func finish(_ output: OutputAction) {
+    private func finish(_ output: OutputAction, base: CGImage? = nil) {
         commitText()
         endChange()
         guard hasSelection, selection.width >= 1, selection.height >= 1 else { return }
-        StyleMemory.lastSelection[displayID] = selection
+        if mode == .transparentBoard, base == nil {
+            // The drawing goes onto what is on screen right now; Snap's own windows are left out of that capture.
+            guard let session else { return }
+            Task { @MainActor in
+                if let live = try? await session.liveCapture()[displayID] {
+                    finish(output, base: live)
+                } else {
+                    showToast("截取屏幕失败")
+                }
+            }
+            return
+        }
+        if !mode.isBoard { StyleMemory.lastSelection[displayID] = selection }
         let settings = Settings.shared
         let format: ImageFormat = output == .copy ? .png : settings.imageFormat
-        guard let rep = exportImage(format: format) else {
+        guard let rep = exportImage(format: format, base: base) else {
             showToast("导出图片失败")
             return
         }
@@ -1733,7 +1803,7 @@ final class CaptureView: NSView {
         switch output {
         case .copy:
             Exporter.copy(rep)
-            let saved = autoSaveIfEnabled()
+            let saved = autoSaveIfEnabled(base: base)
             session?.record(self)
             session?.finish()
             Sound.playCapture()
