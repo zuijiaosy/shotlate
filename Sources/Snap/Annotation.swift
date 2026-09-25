@@ -377,10 +377,19 @@ struct TranslatedBlock {
 
 /// Draws annotations and translations over the frozen screen, in a flipped (top-left origin) context.
 /// Shared by the on-screen view and the exporter so the saved image matches what was on screen.
+/// The mouse pointer as it was when the capture started, drawable onto the screenshot.
+struct CapturedCursor {
+    var image: NSImage
+    /// Where the pointer image goes, in the capture view's flipped points.
+    var rect: CGRect
+}
+
 struct ContentRenderer {
     let base: NSImage
     let bounds: CGRect
     let effect: (MosaicEffect) -> NSImage
+    /// Drawn right above the screenshot, under every annotation.
+    var cursor: CapturedCursor? = nil
 
     func draw(items: [AnnotationItem], translation: [TranslatedBlock]) {
         drawBase()
@@ -389,6 +398,11 @@ struct ContentRenderer {
 
     func drawBase() {
         base.draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+        drawCursor()
+    }
+
+    func drawCursor() {
+        cursor?.image.draw(in: cursor!.rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
 
     /// Translations go first so annotations stay on top of them.
@@ -400,6 +414,9 @@ struct ContentRenderer {
                       baseDrawn: Bool = false) {
         if !baseDrawn, (items + [draft].compactMap { $0 }).contains(where: { $0.tool == .highlighter }) {
             drawBase()
+        } else if !baseDrawn {
+            // On screen the screenshot layer has no pointer; the overlay adds it.
+            drawCursor()
         }
         for block in translation { Self.draw(block) }
         var number = 0

@@ -144,6 +144,12 @@ final class Settings {
         defaults.set(shortcut.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: key)
     }
 
+    /// Whether a capture includes the mouse pointer by default (` toggles it while capturing).
+    var captureCursor: Bool {
+        get { defaults.bool(forKey: "capture.cursor") }
+        set { defaults.set(newValue, forKey: "capture.cursor") }
+    }
+
     /// Keep open pins when Snap quits and show them again at the next launch.
     var restorePins: Bool {
         get { defaults.object(forKey: "pin.restore") as? Bool ?? true }

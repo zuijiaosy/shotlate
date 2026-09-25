@@ -90,7 +90,8 @@ final class CaptureView: NSView {
     private let windowRects: [CGRect]
     private var effectImages: [MosaicEffect: NSImage] = [:]
     private var renderer: ContentRenderer {
-        ContentRenderer(base: baseImage, bounds: bounds, effect: { [unowned self] in self.effectImage($0) })
+        ContentRenderer(base: baseImage, bounds: bounds, effect: { [unowned self] in self.effectImage($0) },
+                        cursor: showsCursor ? capturedCursor : nil)
     }
 
     /// Pixels per point of the frozen image.
@@ -155,7 +156,12 @@ final class CaptureView: NSView {
     private lazy var ocrPanel: OCRPanelView = OCRPanelView { [unowned self] in self.closeOCRPanel() }
     private lazy var magnifier = MagnifierView(snapshot: snapshot, viewSize: bounds.size)
 
-    init(frame: CGRect, snapshot: CGImage, windowRects: [CGRect], displayID: CGDirectDisplayID) {
+    /// The pointer captured with this screen, and whether it is currently part of the picture (toggled with `).
+    private let capturedCursor: CapturedCursor?
+    private var showsCursor = Settings.shared.captureCursor
+
+    init(frame: CGRect, snapshot: CGImage, windowRects: [CGRect], displayID: CGDirectDisplayID, cursor: CapturedCursor? = nil) {
+        self.capturedCursor = cursor
         self.snapshot = snapshot
         self.baseImage = NSImage(cgImage: snapshot, size: frame.size)
         self.windowRects = windowRects
@@ -203,6 +209,18 @@ final class CaptureView: NSView {
         commitSelection()
         updateHistoryButtons()
     }
+
+    private func toggleCursor() {
+        guard let capturedCursor else {
+            showToast("这块屏幕上没有鼠标指针")
+            return
+        }
+        showsCursor.toggle()
+        invalidate(capturedCursor.rect, margin: 2)
+        showToast(showsCursor ? "截图包含鼠标指针 · ` 切换" : "截图不含鼠标指针 · ` 切换", duration: 1.2)
+    }
+
+    var testing_showsCursor: Bool { showsCursor }
 
     func showMessage(_ text: String, duration: TimeInterval = 2.5) {
         showToast(text, duration: duration)
@@ -1204,6 +1222,10 @@ final class CaptureView: NSView {
             return
         }
 
+        if flags.isEmpty, key == "`" {
+            toggleCursor()
+            return
+        }
         if flags.isEmpty, key == "," || key == "." {
             finishPolyline()
             commitText()

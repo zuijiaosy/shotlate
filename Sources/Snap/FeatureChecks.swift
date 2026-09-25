@@ -31,6 +31,7 @@ enum FeatureChecks {
         ("selection-size", selectionSize),
         ("tool-colors", toolColors),
         ("item-styles", itemStyles),
+        ("cursor", cursorCapture),
     ]
 
     @MainActor
@@ -723,5 +724,35 @@ enum FeatureChecks {
         let legacy = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","shape":{"number":{"_0":[1,2]}},"color":[1,0,0,1],"size":20,"effect":"pixelate"}"#
         let decoded = try? JSONDecoder().decode(AnnotationItem.self, from: Data(legacy.utf8))
         expect(decoded?.style == ItemStyle(), "annotations saved before styles existed still load")
+    }
+
+    @MainActor static func cursorCapture() async {
+        let arrow = NSCursor.arrow
+        let tip = CGPoint(x: 300, y: 250) // on the white card
+        let cursor = CapturedCursor(image: arrow.image, rect: CGRect(x: tip.x - arrow.hotSpot.x, y: tip.y - arrow.hotSpot.y,
+                                                                    width: arrow.image.size.width, height: arrow.image.size.height))
+        expect(CaptureEngine.pointer() != nil, "the current system pointer can be read")
+        let h = CaptureHarness(cursor: cursor)
+        h.select(CGRect(x: 200, y: 200, width: 200, height: 120))
+        expect(!h.view.testing_showsCursor, "off by default")
+        func darkPixels(_ rep: NSBitmapImageRep) -> Int {
+            var n = 0
+            for dx in 0..<10 { for dy in 0..<14 {
+                if let c = rep.color(atPoint: CGPoint(x: tip.x - 200 + CGFloat(dx) + 1, y: tip.y - 200 + CGFloat(dy) + 2)), c.brightnessComponent < 0.3 { n += 1 }
+            } }
+            return n
+        }
+        let without = h.export()!
+        h.key("`", code: 50)
+        expect(h.view.testing_showsCursor, "` turns the pointer on")
+        let with = h.export()!
+        write(with, "cursor.png")
+        expect(darkPixels(without) == 0 && darkPixels(with) > 10, "the export contains the pointer only when on (\(darkPixels(without)) vs \(darkPixels(with)))")
+        if let screen = h.screenshot() {
+            let c = screen.color(atPoint: CGPoint(x: tip.x + 3, y: tip.y + 8))!
+            expect(c.brightnessComponent < 0.3, "the on-screen preview shows the pointer too")
+        }
+        h.key("`", code: 50)
+        expect(darkPixels(h.export()!) == 0, "` again takes it out")
     }
 }

@@ -9,7 +9,7 @@ final class CaptureHarness {
     let size: CGSize
 
     /// A 2x canvas: light grey with a white card, black text lines and a dark band, so tools show up on varied pixels.
-    init(size: CGSize = CGSize(width: 800, height: 500), windowRects: [CGRect] = []) {
+    init(size: CGSize = CGSize(width: 800, height: 500), windowRects: [CGRect] = [], cursor: CapturedCursor? = nil) {
         self.size = size
         let scale: CGFloat = 2
         let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
@@ -39,7 +39,7 @@ final class CaptureHarness {
         window = NSWindow(contentRect: CGRect(x: -6000, y: -6000, width: size.width, height: size.height),
                           styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        view = CaptureView(frame: frame, snapshot: snapshot, windowRects: windowRects, displayID: 0)
+        view = CaptureView(frame: frame, snapshot: snapshot, windowRects: windowRects, displayID: 0, cursor: cursor)
         window.contentView = CaptureRootView(frame: frame, snapshot: snapshot, captureView: view)
         window.makeFirstResponder(view)
     }

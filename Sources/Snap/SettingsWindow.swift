@@ -18,6 +18,7 @@ final class SettingsModel: ObservableObject {
     @Published var recording: ShortcutTarget?
     @Published var playSound = Settings.shared.playSound
     @Published var copyAsFile = Settings.shared.copyAsFile
+    @Published var captureCursor = Settings.shared.captureCursor
     @Published var autoSave = Settings.shared.autoSave
     @Published var restorePins = Settings.shared.restorePins
     @Published var historyLimit = Settings.shared.historyLimit
@@ -53,6 +54,7 @@ final class SettingsModel: ObservableObject {
         s.togglePinsShortcut = togglePinsShortcut
         s.playSound = playSound
         s.copyAsFile = copyAsFile
+        s.captureCursor = captureCursor
         s.autoSave = autoSave
         s.restorePins = restorePins
         s.historyLimit = historyLimit
@@ -200,6 +202,7 @@ struct SettingsView: View {
                 }
                 .help("{app} 是截图时位于前台的应用，大括号里的其他内容是日期格式，例如 {yyyyMMdd_HHmmss}")
                 Toggle("复制或贴图时也自动保存", isOn: $model.autoSave)
+                Toggle("默认截取鼠标指针（截图时按 ` 切换）", isOn: $model.captureCursor)
                 Toggle("完成截图时播放音效", isOn: $model.playSound)
                 Toggle("复制图片时同时复制为文件", isOn: $model.copyAsFile)
                     .help("开启后可以在访达里直接 ⌘V 粘贴成 PNG 文件。有的聊天软件会因此把图片当成文件发送。")

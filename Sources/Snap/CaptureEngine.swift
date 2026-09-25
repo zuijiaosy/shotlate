@@ -31,6 +31,20 @@ enum CaptureEngine {
         return snapshots
     }
 
+    struct Pointer {
+        var image: NSImage
+        /// Hot spot in the image's top-left-origin points.
+        var hotSpot: CGPoint
+        /// Global Cocoa coordinates.
+        var location: CGPoint
+    }
+
+    /// The pointer as it looks right now, so it can be added to the frozen screenshot on request.
+    static func pointer() -> Pointer? {
+        guard let cursor = NSCursor.currentSystem else { return nil }
+        return Pointer(image: cursor.image, hotSpot: cursor.hotSpot, location: NSEvent.mouseLocation)
+    }
+
     /// Frames of normal app windows, front to back, in Cocoa global coordinates (origin bottom-left of the main screen).
     static func windowFrames() -> [CGRect] {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],

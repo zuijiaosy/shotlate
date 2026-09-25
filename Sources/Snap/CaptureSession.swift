@@ -69,14 +69,15 @@ final class CaptureSession {
         isStarting = true
         let previousApp = NSWorkspace.shared.frontmostApplication
         Exporter.sourceAppName = previousApp.flatMap { $0 == NSRunningApplication.current ? nil : $0.localizedName }
-        // Read window frames before anything of ours appears on screen.
+        // Read window frames and the pointer before anything of ours appears on screen.
         let windowFrames = CaptureEngine.windowFrames()
+        let pointer = CaptureEngine.pointer()
         Task { @MainActor in
             defer { isStarting = false }
             do {
                 let snapshots = try await CaptureEngine.captureScreens()
                 guard !snapshots.isEmpty else { return }
-                let session = CaptureSession(snapshots: snapshots, windowFrames: windowFrames, previousApp: previousApp)
+                let session = CaptureSession(snapshots: snapshots, windowFrames: windowFrames, pointer: pointer, previousApp: previousApp)
                 current = session
                 session.show()
                 if replay, let view = session.activeView { session.stepHistory(1, from: view) }
@@ -127,7 +128,7 @@ final class CaptureSession {
         self.previousApp = previousApp
     }
 
-    private init(snapshots: [ScreenSnapshot], windowFrames: [CGRect], previousApp: NSRunningApplication?) {
+    private init(snapshots: [ScreenSnapshot], windowFrames: [CGRect], pointer: CaptureEngine.Pointer?, previousApp: NSRunningApplication?) {
         self.previousApp = previousApp
         for snapshot in snapshots {
             let frame = snapshot.screen.frame
@@ -142,7 +143,13 @@ final class CaptureSession {
             let window = OverlayWindow(screen: snapshot.screen)
             liveSnapshots.append(snapshot.image)
             liveWindowRects.append(rects)
-            let view = CaptureView(frame: local, snapshot: snapshot.image, windowRects: rects, displayID: displayID)
+            var cursor: CapturedCursor?
+            if let pointer, frame.contains(pointer.location) {
+                let p = CGPoint(x: pointer.location.x - frame.minX, y: frame.maxY - pointer.location.y)
+                cursor = CapturedCursor(image: pointer.image, rect: CGRect(x: p.x - pointer.hotSpot.x, y: p.y - pointer.hotSpot.y,
+                                                                          width: pointer.image.size.width, height: pointer.image.size.height))
+            }
+            let view = CaptureView(frame: local, snapshot: snapshot.image, windowRects: rects, displayID: displayID, cursor: cursor)
             view.session = self
             window.contentView = CaptureRootView(frame: local, snapshot: snapshot.image, captureView: view)
             windows.append(window)
