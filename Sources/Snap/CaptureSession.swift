@@ -60,6 +60,7 @@ final class CaptureSession {
         }
         isStarting = true
         let previousApp = NSWorkspace.shared.frontmostApplication
+        Exporter.sourceAppName = previousApp.flatMap { $0 == NSRunningApplication.current ? nil : $0.localizedName }
         // Read window frames before anything of ours appears on screen.
         let windowFrames = CaptureEngine.windowFrames()
         Task { @MainActor in

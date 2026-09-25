@@ -356,3 +356,27 @@ import Testing
         #expect(!CodeText.looksLikeCode("The quick brown fox jumps over the lazy dog.\nSecond sentence here."))
     }
 }
+
+@Suite struct FileNameTemplateTests {
+    let date = Date(timeIntervalSince1970: 1_790_000_000) // 2026-09-21 14:13:20 UTC
+    let utc = TimeZone(identifier: "UTC")!
+
+    @Test func defaultTemplate() {
+        #expect(FileNameTemplate.expand(FileNameTemplate.default, date: date, appName: "Safari", timeZone: utc) == "Snap 2026-09-21 14.13.20")
+    }
+
+    @Test func appAndCompactDate() {
+        #expect(FileNameTemplate.expand("{app}_{yyyyMMdd_HHmmss}", date: date, appName: "Xcode", timeZone: utc) == "Xcode_20260921_141320")
+        #expect(FileNameTemplate.expand("{APP}", date: date, appName: nil, timeZone: utc) == "Snap")
+    }
+
+    @Test func sanitizesPathCharacters() {
+        #expect(FileNameTemplate.expand("{yyyy/MM/dd HH:mm}", date: date, appName: nil, timeZone: utc) == "2026-09-21 14.13")
+        #expect(FileNameTemplate.expand("{app}", date: date, appName: "A/B: C", timeZone: utc) == "A-B. C")
+    }
+
+    @Test func unclosedBraceAndEmpty() {
+        #expect(FileNameTemplate.expand("shot {yyyy", date: date, appName: nil, timeZone: utc) == "shot {yyyy")
+        #expect(FileNameTemplate.expand("  ", date: date, appName: nil, timeZone: utc) == "Snap")
+    }
+}

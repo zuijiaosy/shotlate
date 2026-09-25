@@ -144,6 +144,17 @@ final class Settings {
         defaults.set(shortcut.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: key)
     }
 
+    /// Also save to the folder when a capture is copied or pinned.
+    var autoSave: Bool {
+        get { defaults.bool(forKey: "output.autoSave") }
+        set { defaults.set(newValue, forKey: "output.autoSave") }
+    }
+
+    var fileNameTemplate: String {
+        get { defaults.string(forKey: "output.fileNameTemplate") ?? FileNameTemplate.default }
+        set { defaults.set(newValue, forKey: "output.fileNameTemplate") }
+    }
+
     /// Also put a PNG file on the clipboard when copying, so it can be pasted into Finder.
     var copyAsFile: Bool {
         get { defaults.bool(forKey: "output.copyAsFile") }

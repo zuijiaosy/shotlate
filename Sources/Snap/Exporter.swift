@@ -1,4 +1,5 @@
 import AppKit
+import SnapCore
 import UniformTypeIdentifiers
 
 struct ExportOptions {
@@ -109,10 +110,12 @@ enum Exporter {
         return url
     }
 
+    /// Name of the app that was in front when the current capture started, for `{app}` in file names.
+    static var sourceAppName: String?
+
     static func defaultFileName(format: ImageFormat) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        return "Snap \(formatter.string(from: Date())).\(format.fileExtension)"
+        let base = FileNameTemplate.expand(Settings.shared.fileNameTemplate, date: Date(), appName: sourceAppName)
+        return "\(base).\(format.fileExtension)"
     }
 
     /// Saves into the configured folder with a timestamped name and returns the file URL.

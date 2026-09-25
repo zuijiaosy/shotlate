@@ -22,6 +22,7 @@ enum FeatureChecks {
         ("eraser", eraser),
         ("polyline", polyline),
         ("copy-file", copyAsFile),
+        ("auto-save", autoSave),
     ]
 
     @MainActor
@@ -324,6 +325,40 @@ enum FeatureChecks {
         let before = PinManager.shared.pins.count
         PinManager.shared.pinClipboard(pb)
         expect(PinManager.shared.pins.count == before + 1, "a copied-as-file image can be pinned again")
+        PinManager.shared.closeAll()
+    }
+
+    @MainActor static func autoSave() async {
+        let settings = Settings.shared
+        let saved = (settings.autoSave, settings.fileNameTemplate, settings.saveDirectory)
+        defer { (settings.autoSave, settings.fileNameTemplate, settings.saveDirectory) = saved }
+        let dir = outputDirectory.appendingPathComponent("autosave", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        settings.saveDirectory = dir
+        settings.fileNameTemplate = "{app}_{yyyyMMdd}"
+        Exporter.sourceAppName = "Safari"
+        let expected = "Safari_" + { let f = DateFormatter(); f.dateFormat = "yyyyMMdd"; return f.string(from: Date()) }()
+
+        settings.autoSave = false
+        var h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 300, height: 200))
+        h.key("\r", code: 36)
+        var files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        expect(files.isEmpty, "copy without auto-save writes no file")
+
+        settings.autoSave = true
+        h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 300, height: 200))
+        h.key("\r", code: 36)
+        files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        expect(files.count == 1, "copy with auto-save writes one file (\(files))")
+        expect(files.first?.hasPrefix(expected) ?? false, "file name follows the template (\(files.first ?? "-"))")
+
+        h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 300, height: 200))
+        h.key("t", code: 17, flags: .command)
+        files = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        expect(files.count == 2 && files.contains("\(expected) 2.png"), "pinning also auto-saves, with a numbered name on collision (\(files.sorted()))")
         PinManager.shared.closeAll()
     }
 }

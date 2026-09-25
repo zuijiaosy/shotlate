@@ -1463,9 +1463,11 @@ final class CaptureView: NSView {
         endChange()
         guard hasSelection, let frame = selectionOnScreen, let rep = exportImage(format: .png, shadow: false) else { return }
         StyleMemory.lastSelection[displayID] = selection
+        let saved = autoSaveIfEnabled()
         session?.finish()
         Sound.playCapture()
         PinManager.shared.pin(rep, frame: frame)
+        if let saved { HUD.show("已贴图，并自动保存到 \(saved)", on: window?.screen) }
     }
 
     /// Hands the selected region to the long-screenshot controller. Annotations are not carried over.
@@ -1478,6 +1480,15 @@ final class CaptureView: NSView {
         StyleMemory.lastSelection[displayID] = selection
         session?.finish()
         ScrollCaptureController.start(rect: rect, screen: screen)
+    }
+
+    /// With auto-save on, copying or pinning also writes the file. Returns the short path, or nil when off or failed.
+    private func autoSaveIfEnabled() -> String? {
+        let settings = Settings.shared
+        guard settings.autoSave, let rep = exportImage(format: settings.imageFormat),
+              let url = try? Exporter.save(rep, format: settings.imageFormat, directory: settings.saveDirectory)
+        else { return nil }
+        return url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
     }
 
     private func finish(_ output: OutputAction) {
@@ -1495,9 +1506,10 @@ final class CaptureView: NSView {
         switch output {
         case .copy:
             Exporter.copy(rep)
+            let saved = autoSaveIfEnabled()
             session?.finish()
             Sound.playCapture()
-            HUD.show("已复制到剪贴板", on: screen)
+            HUD.show(saved.map { "已复制，并自动保存到 \($0)" } ?? "已复制到剪贴板", on: screen)
         case .save:
             do {
                 let url = try Exporter.save(rep, format: format, directory: settings.saveDirectory)
