@@ -16,6 +16,9 @@ final class PinStore {
         var floating: Bool
         var group: String
         var text: String?
+        var grayscale: Bool?
+        var inverted: Bool?
+        var background: PinBackground?
     }
 
     struct State: Codable {
@@ -50,7 +53,8 @@ final class PinStore {
         try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
         let saved = manager.pins.map { pin in
             SavedPin(id: pin.id, frame: pin.persistentFrame, imageSize: pin.rep.size, zoom: pin.zoom, opacity: pin.alphaValue,
-                     floating: pin.level == .floating, group: pin.group, text: pin.sourceText)
+                     floating: pin.level == .floating, group: pin.group, text: pin.sourceText,
+                     grayscale: pin.grayscale, inverted: pin.inverted, background: pin.background)
         }
         // Images never change for a given id (rotating makes a new one), so only new ones are written.
         for pin in manager.pins where !fm.fileExists(atPath: imageURL(pin.id).path) {
@@ -75,6 +79,9 @@ final class PinStore {
             pin.alphaValue = saved.opacity
             pin.level = saved.floating ? .floating : .normal
             pin.sourceText = saved.text
+            pin.grayscale = saved.grayscale ?? false
+            pin.inverted = saved.inverted ?? false
+            pin.background = saved.background ?? .transparent
         }
         manager.restoreView(currentGroup: state.currentGroup, hidden: state.hidden)
     }

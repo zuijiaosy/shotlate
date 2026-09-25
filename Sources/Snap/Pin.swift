@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import SnapCore
 
 /// Keeps track of open pins and the ones closed recently, so they can be restored.
@@ -236,6 +237,27 @@ final class PinWindow: NSPanel {
     /// Stable identity for saving across launches; a rotated or flipped pin gets a new one because its image changed.
     var id = UUID()
 
+    /// Display filters (keys 5 and 6); copies, saves and shares use what is shown.
+    var grayscale = false { didSet { refreshImage() } }
+    var inverted = false { didSet { refreshImage() } }
+    var background: PinBackground = .transparent { didSet { pinView.background = background } }
+
+    /// The image as shown, with grayscale and invert applied.
+    var displayedRep: NSBitmapImageRep {
+        guard grayscale || inverted, let cg = rep.cgImage else { return rep }
+        var image = CIImage(cgImage: cg)
+        if grayscale { image = image.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0]) }
+        if inverted { image = image.applyingFilter("CIColorInvert") }
+        guard let out = CIContext().createCGImage(image, from: CGRect(x: 0, y: 0, width: cg.width, height: cg.height)) else { return rep }
+        let filtered = NSBitmapImageRep(cgImage: out)
+        filtered.size = rep.size
+        return filtered
+    }
+
+    private func refreshImage() {
+        pinView.image = image(from: displayedRep)
+    }
+
     /// The frame to save: the full frame while collapsed to a thumbnail.
     var persistentFrame: CGRect { frameBeforeThumbnail ?? frame }
     private var baseSize: CGSize
@@ -399,12 +421,50 @@ final class PinWindow: NSPanel {
     /// Same number keys as Snipaste: 1/2 rotate clockwise/counter-clockwise, 3/4 flip horizontally/vertically.
     private static let digitActions: [String: (PinWindow) -> () -> Void] = [
         "1": { $0.rotateRight }, "2": { $0.rotateLeft }, "3": { $0.flipHorizontal }, "4": { $0.flipVertical },
+        "5": { $0.toggleGrayscale }, "6": { $0.toggleInvert },
     ]
+
+    @objc func toggleGrayscale() {
+        grayscale.toggle()
+        pinView.flash(grayscale ? "灰度" : "彩色")
+    }
+
+    @objc func toggleInvert() {
+        inverted.toggle()
+        pinView.flash(inverted ? "反色" : "取消反色")
+    }
+
+    @objc func setBackground(_ sender: NSMenuItem) {
+        background = PinBackground(rawValue: sender.tag) ?? .transparent
+    }
+
+    /// Keeps only the thumbnail's region, for good.
+    @objc func cropToThumbnail() {
+        guard let region = thumbnail, let cg = rep.cgImage else { return }
+        let sx = CGFloat(cg.width) / rep.size.width, sy = CGFloat(cg.height) / rep.size.height
+        guard let cropped = cg.cropping(to: CGRect(x: region.minX * sx, y: region.minY * sy, width: region.width * sx, height: region.height * sy).integral)
+        else { return }
+        let screenFrame = frame
+        let newRep = NSBitmapImageRep(cgImage: cropped)
+        newRep.size = region.size
+        thumbnail = nil
+        frameBeforeThumbnail = nil
+        pinView.thumbnail = nil
+        rep = newRep
+        id = UUID()
+        baseSize = region.size
+        refreshImage()
+        // The cropped pin stays exactly where its thumbnail was.
+        zoom = screenFrame.width / region.width
+        setFrame(screenFrame, display: true)
+        pinView.flash("已裁剪")
+        PinStore.shared.scheduleSave()
+    }
 
     // MARK: Actions
 
     @objc func copyImage() {
-        Exporter.copy(rep)
+        Exporter.copy(displayedRep)
         pinView.flash("已复制")
     }
 
@@ -417,7 +477,7 @@ final class PinWindow: NSPanel {
 
     @objc func saveImage() {
         do {
-            let url = try Exporter.save(rep, format: Settings.shared.imageFormat, directory: Settings.shared.saveDirectory)
+            let url = try Exporter.save(displayedRep, format: Settings.shared.imageFormat, directory: Settings.shared.saveDirectory)
             pinView.flash("已保存")
             HUD.show("已保存到 \(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
         } catch {
@@ -461,7 +521,7 @@ final class PinWindow: NSPanel {
     @objc func closeFromMenu() { close(keepInHistory: true) }
 
     @objc func share() {
-        ShareController.share(rep, relativeTo: pinView)
+        ShareController.share(displayedRep, relativeTo: pinView)
     }
 
     /// Replaces the picture after annotating; the pin keeps its place and zoom.
@@ -470,7 +530,7 @@ final class PinWindow: NSPanel {
         rep = newRep
         id = UUID()
         baseSize = newRep.size
-        pinView.image = image(from: newRep)
+        refreshImage()
         setZoom(zoomNow, anchor: CGPoint(x: frame.minX, y: frame.maxY), flash: false)
         PinStore.shared.scheduleSave()
     }
@@ -545,7 +605,7 @@ final class PinWindow: NSPanel {
         rep = newRep
         id = UUID()
         if rotates { baseSize = CGSize(width: baseSize.height, height: baseSize.width) }
-        pinView.image = image(from: newRep)
+        refreshImage()
         setZoom(zoom)
     }
 
@@ -570,6 +630,24 @@ final class PinWindow: NSPanel {
         menu.addItem(item("分享…", #selector(share)))
         menu.addItem(.separator())
         menu.addItem(item(thumbnail == nil ? "缩略图" : "恢复原大小", #selector(toggleThumbnail)))
+        if thumbnail != nil { menu.addItem(item("裁剪为此区域", #selector(cropToThumbnail))) }
+        let gray = item("灰度", #selector(toggleGrayscale), "5")
+        gray.state = grayscale ? .on : .off
+        let invert = item("反色", #selector(toggleInvert), "6")
+        invert.state = inverted ? .on : .off
+        for i in [gray, invert] {
+            i.keyEquivalentModifierMask = []
+            menu.addItem(i)
+        }
+        let backgroundItem = NSMenuItem(title: "透明区域", action: nil, keyEquivalent: "")
+        let backgroundMenu = NSMenu()
+        for option in PinBackground.allCases {
+            let i = item(option.title, #selector(setBackground(_:)), tag: option.rawValue)
+            i.state = background == option ? .on : .off
+            backgroundMenu.addItem(i)
+        }
+        backgroundItem.submenu = backgroundMenu
+        menu.addItem(backgroundItem)
 
         let zoomItem = NSMenuItem(title: "缩放", action: nil, keyEquivalent: "")
         let zoomMenu = NSMenu()
@@ -635,6 +713,7 @@ final class PinView: NSView {
     weak var window_: PinWindow?
     var image: NSImage? { didSet { needsDisplay = true } }
     var passthrough = false { didSet { needsDisplay = true } }
+    var background: PinBackground = .transparent { didSet { needsDisplay = true } }
     /// Region of the image to show while collapsed, in image points (top-left origin).
     var thumbnail: CGRect? { didSet { needsDisplay = true } }
     private let label = ToastView()
@@ -662,7 +741,20 @@ final class PinView: NSView {
                 // NSImage source rects have a bottom-left origin.
                 source = CGRect(x: t.minX, y: image.size.height - t.maxY, width: t.width, height: t.height)
             }
-            image.draw(in: bounds, from: source, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+            if let colors = background.checker {
+                // A checkerboard behind see-through parts, like image editors show transparency.
+                let cell: CGFloat = 8
+                colors.0.setFill()
+                bounds.fill()
+                colors.1.setFill()
+                for row in 0...Int(bounds.height / cell) {
+                    for col in 0...Int(bounds.width / cell) where (row + col) % 2 == 0 {
+                        CGRect(x: CGFloat(col) * cell, y: CGFloat(row) * cell, width: cell, height: cell).fill()
+                    }
+                }
+            }
+            image.draw(in: bounds, from: source, operation: background.checker == nil ? .copy : .sourceOver, fraction: 1,
+                       respectFlipped: true, hints: nil)
         }
         if let region {
             let path = NSBezierPath(rect: region.insetBy(dx: 0.5, dy: 0.5))
@@ -761,5 +853,26 @@ final class PinView: NSView {
         if let region { window_?.enterThumbnail(viewRegion: region) }
         regionStart = nil
         self.region = nil
+    }
+}
+
+/// How a pin shows the see-through parts of its image.
+enum PinBackground: Int, CaseIterable, Codable {
+    case transparent, lightChecker, darkChecker
+
+    var title: String {
+        switch self {
+        case .transparent: return "透明"
+        case .lightChecker: return "浅色棋盘格"
+        case .darkChecker: return "深色棋盘格"
+        }
+    }
+
+    var checker: (NSColor, NSColor)? {
+        switch self {
+        case .transparent: return nil
+        case .lightChecker: return (NSColor(white: 1, alpha: 1), NSColor(white: 0.85, alpha: 1))
+        case .darkChecker: return (NSColor(white: 0.2, alpha: 1), NSColor(white: 0.3, alpha: 1))
+        }
     }
 }

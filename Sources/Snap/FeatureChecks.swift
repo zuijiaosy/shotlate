@@ -45,6 +45,7 @@ enum FeatureChecks {
         ("automation", automation),
         ("hotkeys", hotkeys),
         ("magnifier", magnifierTool),
+        ("pin-filters", pinFilters),
     ]
 
     @MainActor
@@ -1117,5 +1118,44 @@ enum FeatureChecks {
             expect(abs(moved.y - target.y - 150) < 0.5, "the lens can be moved on its own")
         }
         h.screenshot().map { write($0, "magnifier-overlay.png") }
+    }
+
+    @MainActor static func pinFilters() async {
+        let pin = PinManager.shared.pin(splitRep(CGSize(width: 200, height: 100)), frame: CGRect(x: -4000, y: -4000, width: 200, height: 100))
+        key(pin, "5", code: 23)
+        let gray = pin.displayedRep.color(atPoint: CGPoint(x: 50, y: 50))!
+        expect(pin.grayscale && abs(gray.redComponent - gray.blueComponent) < 0.03, "5 shows the pin in grayscale")
+        if let shot = render(pin.testing_view), let c = shot.color(atPoint: CGPoint(x: 50, y: 50)) {
+            expect(abs(c.redComponent - c.greenComponent) < 0.05, "the window shows it gray too")
+        }
+        key(pin, "5", code: 23)
+        key(pin, "6", code: 22)
+        let inv = pin.displayedRep.color(atPoint: CGPoint(x: 50, y: 50))!, orig = pin.rep.color(atPoint: CGPoint(x: 50, y: 50))!
+        expect(abs(inv.redComponent - (1 - orig.redComponent)) < 0.05, "6 inverts the colors")
+        pin.rotateRight()
+        expect(pin.inverted && pin.displayedRep.color(atPoint: CGPoint(x: 50, y: 50))!.redComponent < 0.5, "filters survive rotating (red top half, inverted)")
+        pin.rotateLeft()
+        key(pin, "6", code: 22)
+
+        // Crop to the right (blue) half via a thumbnail.
+        pin.testing_view.testing_rightDrag(from: CGPoint(x: 110, y: 10), to: CGPoint(x: 190, y: 90))
+        let thumbFrame = pin.frame
+        pin.cropToThumbnail()
+        expect(pin.thumbnail == nil && pin.rep.size == CGSize(width: 80, height: 80) && pin.frame == thumbFrame, "crop keeps just the region, in place")
+        let c = pin.rep.color(atPoint: CGPoint(x: 40, y: 40))!
+        expect(c.blueComponent > 0.8 && c.redComponent < 0.4, "the cropped image is the blue half")
+        pin.setZoom(1)
+        expect(pin.frame.size == CGSize(width: 80, height: 80), "100% is the cropped size")
+
+        // A transparent image on a dark checkerboard.
+        let clear = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 80, pixelsHigh: 80, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                     isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        clear.size = CGSize(width: 40, height: 40)
+        let glass = PinManager.shared.pin(clear, frame: CGRect(x: -3000, y: -4000, width: 40, height: 40))
+        glass.background = .darkChecker
+        if let shot = render(glass.testing_view), let p = shot.color(atPoint: CGPoint(x: 12, y: 12)) {
+            expect(p.alphaComponent > 0.99 && p.brightnessComponent < 0.4, "see-through parts show the dark checkerboard")
+        }
+        PinManager.shared.closeAll()
     }
 }
