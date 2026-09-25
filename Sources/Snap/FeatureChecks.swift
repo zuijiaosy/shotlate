@@ -24,6 +24,7 @@ enum FeatureChecks {
         ("copy-file", copyAsFile),
         ("auto-save", autoSave),
         ("history", history),
+        ("pin-thumbnail", pinThumbnail),
     ]
 
     @MainActor
@@ -443,5 +444,45 @@ enum FeatureChecks {
         store.clear()
         store.waitForWrites()
         expect(!FileManager.default.fileExists(atPath: dir.path) && store.entries.isEmpty, "clear removes everything")
+    }
+
+    /// Left half red, right half blue.
+    @MainActor static func splitRep(_ size: CGSize) -> NSBitmapImageRep {
+        let rep = sampleRep(size, color: .systemRed)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor.systemBlue.setFill()
+        CGRect(x: size.width / 2, y: 0, width: size.width / 2, height: size.height).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        return rep
+    }
+
+    @MainActor static func render(_ view: NSView) -> NSBitmapImageRep? {
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep
+    }
+
+    @MainActor static func pinThumbnail() async {
+        let original = CGRect(x: -4000, y: -4000, width: 200, height: 100)
+        let pin = PinManager.shared.pin(splitRep(original.size), frame: original)
+        pin.testing_view.testing_rightDrag(from: CGPoint(x: 120, y: 20), to: CGPoint(x: 180, y: 80))
+        expect(pin.thumbnail != nil && pin.frame.size == CGSize(width: 60, height: 60), "right-drag collapses to the dragged box (\(pin.frame.size))")
+        expect(pin.frame.minX == original.minX + 120 && pin.frame.maxY == original.maxY - 20, "the region stays where it was on screen")
+        if let shot = render(pin.testing_view), let c = shot.color(atPoint: CGPoint(x: 30, y: 30)) {
+            expect(c.blueComponent > 0.8 && c.redComponent < 0.4, "thumbnail shows the right half (blue) (\(c))")
+            write(shot, "pin-thumbnail.png")
+        }
+        pin.exitThumbnail()
+        expect(pin.thumbnail == nil && pin.frame == original, "exiting restores the full pin in place (\(pin.frame))")
+
+        pin.enterFixedThumbnail(around: CGPoint(x: 10, y: 50))
+        expect(pin.frame.size == CGSize(width: 64, height: 64) && pin.frame.minX == original.minX, "fixed thumbnail is a 64pt square clamped inside the image")
+        if let shot = render(pin.testing_view), let c = shot.color(atPoint: CGPoint(x: 20, y: 30)) {
+            expect(c.redComponent > 0.8 && c.blueComponent < 0.4, "fixed thumbnail shows the left half (red)")
+        }
+        pin.setZoom(1)
+        expect(pin.thumbnail == nil && pin.frame.size == original.size, "zooming leaves thumbnail mode")
+        PinManager.shared.closeAll()
     }
 }

@@ -150,7 +150,48 @@ final class PinWindow: NSPanel {
 
     /// The window frame this pin would have at 100%, keeping its current center.
     var frameAtFullSize: CGRect {
-        CGRect(x: frame.midX - baseSize.width / 2, y: frame.midY - baseSize.height / 2, width: baseSize.width, height: baseSize.height)
+        let reference = frameBeforeThumbnail ?? frame
+        return CGRect(x: reference.midX - baseSize.width / 2, y: reference.midY - baseSize.height / 2, width: baseSize.width, height: baseSize.height)
+    }
+
+    // MARK: Thumbnail
+
+    /// The part of the image shown while collapsed to a thumbnail, in image points with a top-left origin.
+    private(set) var thumbnail: CGRect?
+    private var frameBeforeThumbnail: CGRect?
+    static let thumbnailSide: CGFloat = 64
+
+    /// Collapses the pin to `region` (in view points, top-left origin), keeping that region where it is on screen.
+    func enterThumbnail(viewRegion region: CGRect) {
+        let bounds = CGRect(origin: .zero, size: frame.size)
+        let r = region.intersection(bounds)
+        guard r.width >= 4, r.height >= 4, thumbnail == nil else { return }
+        let scale = zoom
+        thumbnail = CGRect(x: r.minX / scale, y: r.minY / scale, width: r.width / scale, height: r.height / scale)
+        frameBeforeThumbnail = frame
+        setFrame(CGRect(x: frame.minX + r.minX, y: frame.maxY - r.maxY, width: r.width, height: r.height), display: true)
+        pinView.thumbnail = thumbnail
+    }
+
+    /// A fixed-size square thumbnail around `point` (view points, top-left origin).
+    func enterFixedThumbnail(around point: CGPoint) {
+        let side = min(Self.thumbnailSide, frame.width, frame.height)
+        var r = CGRect(x: point.x - side / 2, y: point.y - side / 2, width: side, height: side)
+        r.origin.x = min(max(0, r.minX), frame.width - side)
+        r.origin.y = min(max(0, r.minY), frame.height - side)
+        enterThumbnail(viewRegion: r)
+    }
+
+    func exitThumbnail() {
+        guard thumbnail != nil, let previous = frameBeforeThumbnail else { return }
+        // Put the full image back so the thumbnail's region stays where it is on screen.
+        let region = thumbnail!
+        let x = frame.minX - region.minX * zoom
+        let maxY = frame.maxY + region.minY * zoom
+        thumbnail = nil
+        frameBeforeThumbnail = nil
+        pinView.thumbnail = nil
+        setFrame(CGRect(x: x, y: maxY - previous.height, width: previous.width, height: previous.height), display: true)
     }
 
     private func image(from rep: NSBitmapImageRep) -> NSImage {
@@ -162,6 +203,7 @@ final class PinWindow: NSPanel {
     // MARK: Zoom and opacity
 
     func setZoom(_ newZoom: CGFloat, anchor: CGPoint? = nil) {
+        exitThumbnail()
         let clamped = min(max(newZoom, 0.1), 8)
         let anchor = anchor ?? CGPoint(x: frame.midX, y: frame.midY)
         let rx = (anchor.x - frame.minX) / max(frame.width, 1)
@@ -179,6 +221,7 @@ final class PinWindow: NSPanel {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        guard thumbnail == nil else { return }
         scrollAccumulator += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 10 : event.scrollingDeltaY
         guard abs(scrollAccumulator) >= 1 else { return }
         let steps = scrollAccumulator.rounded(.towardZero)
@@ -290,6 +333,16 @@ final class PinWindow: NSPanel {
 
     @objc func closeFromMenu() { close(keepInHistory: true) }
 
+    @objc func toggleThumbnail() {
+        if thumbnail != nil {
+            exitThumbnail()
+        } else {
+            enterFixedThumbnail(around: CGPoint(x: frame.width / 2, y: frame.height / 2))
+        }
+    }
+
+    var testing_view: PinView { pinView }
+
     /// Closes without keeping a copy to restore.
     @objc func destroy() { close(keepInHistory: false) }
     @objc func closeAllFromMenu() { PinManager.shared.closeAll() }
@@ -310,6 +363,7 @@ final class PinWindow: NSPanel {
     private enum Transform { case rotateLeft, rotateRight, flipHorizontal, flipVertical }
 
     private func transform(_ t: Transform) {
+        exitThumbnail()
         guard let cg = rep.cgImage else { return }
         let w = cg.width, h = cg.height
         let rotates = t == .rotateLeft || t == .rotateRight
@@ -358,6 +412,7 @@ final class PinWindow: NSPanel {
         menu.addItem(item("保存", #selector(saveImage), "s"))
         menu.addItem(item("识别文字", #selector(recognizeText)))
         menu.addItem(.separator())
+        menu.addItem(item(thumbnail == nil ? "缩略图" : "恢复原大小", #selector(toggleThumbnail)))
 
         let zoomItem = NSMenuItem(title: "缩放", action: nil, keyEquivalent: "")
         let zoomMenu = NSMenu()
@@ -406,8 +461,13 @@ final class PinView: NSView {
     weak var window_: PinWindow?
     var image: NSImage? { didSet { needsDisplay = true } }
     var passthrough = false { didSet { needsDisplay = true } }
+    /// Region of the image to show while collapsed, in image points (top-left origin).
+    var thumbnail: CGRect? { didSet { needsDisplay = true } }
     private let label = ToastView()
     private var dragStart: (mouse: CGPoint, origin: CGPoint)?
+    /// Right-drag box that becomes a thumbnail, in view points.
+    private var regionStart: CGPoint?
+    private var region: CGRect? { didSet { needsDisplay = true } }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -417,28 +477,52 @@ final class PinView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
         NSGraphicsContext.current?.imageInterpolation = (window_?.zoom ?? 1) >= 2 ? .none : .high
-        image?.draw(in: bounds, from: .zero, operation: .copy, fraction: 1)
+        if let image {
+            var source = CGRect.zero
+            if let t = thumbnail {
+                // NSImage source rects have a bottom-left origin.
+                source = CGRect(x: t.minX, y: image.size.height - t.maxY, width: t.width, height: t.height)
+            }
+            image.draw(in: bounds, from: source, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+        }
+        if let region {
+            let path = NSBezierPath(rect: region.insetBy(dx: 0.5, dy: 0.5))
+            NSColor.white.withAlphaComponent(0.8).setStroke()
+            path.stroke()
+            path.setLineDash([4, 3], count: 2, phase: 0)
+            selectionBlue.setStroke()
+            path.stroke()
+        }
         let active = window_?.isKeyWindow ?? false
         let color: NSColor = passthrough ? .systemGreen : active ? selectionBlue : NSColor.gray.withAlphaComponent(0.5)
         color.setStroke()
         let border = NSBezierPath(rect: bounds.insetBy(dx: 0.5, dy: 0.5))
         border.lineWidth = active || passthrough ? 1.5 : 1
+        if thumbnail != nil { border.setLineDash([3, 2], count: 2, phase: 0) }
         border.stroke()
     }
 
     func flash(_ text: String) {
         label.show(text, duration: 1.2, maxWidth: max(120, bounds.width))
-        label.setFrameOrigin(CGPoint(x: max(4, bounds.maxX - label.frame.width - 6), y: 6))
+        label.setFrameOrigin(CGPoint(x: max(4, bounds.maxX - label.frame.width - 6), y: max(4, bounds.maxY - label.frame.height - 6)))
     }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeKey()
         if event.clickCount == 2 {
-            window_?.close(keepInHistory: true)
+            let p = convert(event.locationInWindow, from: nil)
+            if window_?.thumbnail != nil {
+                window_?.exitThumbnail()
+            } else if event.modifierFlags.contains(.shift) {
+                window_?.enterFixedThumbnail(around: p)
+            } else {
+                window_?.close(keepInHistory: true)
+            }
             return
         }
         dragStart = (NSEvent.mouseLocation, window?.frame.origin ?? .zero)
@@ -459,11 +543,49 @@ final class PinView: NSView {
         window_?.setZoom(1)
     }
 
-    override func menu(for event: NSEvent) -> NSMenu? {
-        window_?.makeMenu()
+    // Right-drag draws a box that becomes a thumbnail; a right click without dragging opens the menu.
+    override func rightMouseDown(with event: NSEvent) {
+        window?.makeKey()
+        regionStart = window_?.thumbnail == nil ? convert(event.locationInWindow, from: nil) : nil
+        region = nil
+        if regionStart == nil { showMenu(event) }
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        guard let regionStart else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        let r = CGRect(corners: regionStart, CGPoint(x: min(max(p.x, 0), bounds.width), y: min(max(p.y, 0), bounds.height)))
+        region = r.width > 3 || r.height > 3 ? r : nil
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        defer {
+            regionStart = nil
+            region = nil
+        }
+        guard regionStart != nil else { return }
+        if let region, region.width >= 8, region.height >= 8 {
+            window_?.enterThumbnail(viewRegion: region)
+        } else {
+            showMenu(event)
+        }
+    }
+
+    private func showMenu(_ event: NSEvent) {
+        guard let menu = window_?.makeMenu() else { return }
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .openHand)
+    }
+
+    // Test hooks: drive the right-drag without real events.
+    func testing_rightDrag(from a: CGPoint, to b: CGPoint) {
+        regionStart = a
+        region = CGRect(corners: a, b)
+        if let region { window_?.enterThumbnail(viewRegion: region) }
+        regionStart = nil
+        self.region = nil
     }
 }
