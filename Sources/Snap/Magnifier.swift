@@ -3,10 +3,12 @@ import AppKit
 /// Zoomed pixel view that follows the cursor while choosing or adjusting a selection.
 /// Shows the cursor position, the selection size and the color of the pixel under the cursor.
 final class MagnifierView: NSView {
-    static let cells = 15
-    static let cellSize: CGFloat = 8
-    static let zoomSide = CGFloat(cells) * cellSize
     static let infoHeight: CGFloat = 50
+    /// Screen pixels across the zoom area (odd, so one sits in the middle) and the points each one takes.
+    let cells: Int
+    let cellSize: CGFloat
+    let showGrid: Bool
+    var zoomSide: CGFloat { CGFloat(cells) * cellSize }
 
     private let snapshot: CGImage
     private let pointsPerPixel: CGFloat
@@ -16,10 +18,14 @@ final class MagnifierView: NSView {
     var sizeText: String? { didSet { needsDisplay = true } }
     private var position = CGPoint.zero
 
-    init(snapshot: CGImage, viewSize: CGSize) {
+    init(snapshot: CGImage, viewSize: CGSize, zoom: Int = Settings.shared.magnifierZoom, grid: Bool = Settings.shared.magnifierGrid) {
         self.snapshot = snapshot
         pointsPerPixel = viewSize.width / CGFloat(snapshot.width)
-        super.init(frame: CGRect(x: 0, y: 0, width: Self.zoomSide, height: Self.zoomSide + Self.infoHeight))
+        cellSize = CGFloat(max(2, zoom))
+        cells = Int(120 / cellSize) | 1
+        showGrid = grid
+        super.init(frame: CGRect(x: 0, y: 0, width: CGFloat(Int(120 / CGFloat(max(2, zoom))) | 1) * CGFloat(max(2, zoom)), height: 0))
+        setFrameSize(CGSize(width: zoomSide, height: zoomSide + Self.infoHeight))
         wantsLayer = true
         layer?.shadowColor = NSColor.black.cgColor
         layer?.shadowOpacity = 0.35
@@ -83,23 +89,23 @@ final class MagnifierView: NSView {
     }
 
     private func drawZoom() {
-        let half = Self.cells / 2
-        let wanted = CGRect(x: pixel.x - half, y: pixel.y - half, width: Self.cells, height: Self.cells)
+        let half = cells / 2
+        let wanted = CGRect(x: pixel.x - half, y: pixel.y - half, width: cells, height: cells)
         let available = wanted.intersection(CGRect(x: 0, y: 0, width: snapshot.width, height: snapshot.height))
         NSColor.black.setFill()
-        CGRect(x: 0, y: 0, width: Self.zoomSide, height: Self.zoomSide).fill()
+        CGRect(x: 0, y: 0, width: zoomSide, height: zoomSide).fill()
         guard !available.isEmpty, let crop = snapshot.cropping(to: available) else { return }
-        let dest = CGRect(x: (available.minX - wanted.minX) * Self.cellSize, y: (available.minY - wanted.minY) * Self.cellSize,
-                          width: available.width * Self.cellSize, height: available.height * Self.cellSize)
+        let dest = CGRect(x: (available.minX - wanted.minX) * cellSize, y: (available.minY - wanted.minY) * cellSize,
+                          width: available.width * cellSize, height: available.height * cellSize)
         NSGraphicsContext.current?.imageInterpolation = .none
         NSImage(cgImage: crop, size: available.size).draw(in: dest, from: .zero, operation: .copy, fraction: 1,
                                                           respectFlipped: true, hints: [.interpolation: NSImageInterpolation.none.rawValue])
     }
 
     private func drawZoomOverlay() {
-        let side = Self.zoomSide
-        let cell = Self.cellSize
-        let center = CGFloat(Self.cells / 2) * cell
+        let side = zoomSide
+        let cell = cellSize
+        let center = CGFloat(cells / 2) * cell
 
         // Crosshair through the center row and column.
         selectionBlue.withAlphaComponent(0.28).setFill()
@@ -107,8 +113,8 @@ final class MagnifierView: NSView {
         CGRect(x: center, y: 0, width: cell, height: side).fill()
 
         // Faint pixel grid.
-        NSColor.white.withAlphaComponent(0.07).setFill()
-        for i in 1..<Self.cells {
+        NSColor.white.withAlphaComponent(showGrid ? 0.07 : 0).setFill()
+        for i in 1..<cells where showGrid {
             CGRect(x: CGFloat(i) * cell, y: 0, width: 0.5, height: side).fill()
             CGRect(x: 0, y: CGFloat(i) * cell, width: side, height: 0.5).fill()
         }
@@ -129,7 +135,7 @@ final class MagnifierView: NSView {
     }
 
     private func drawInfo() {
-        let side = Self.zoomSide
+        let side = zoomSide
         let mono = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
         let secondary: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 9.5), .foregroundColor: NSColor.white.withAlphaComponent(0.55)]
         let primary: [NSAttributedString.Key: Any] = [.font: mono, .foregroundColor: NSColor.white]

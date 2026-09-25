@@ -664,11 +664,19 @@ final class CaptureView: NSView {
         }
     }
 
+    private let magnifierHidden = Settings.shared.magnifierHidden
+    /// ⌥ held: shows the loupe even when hidden in settings.
+    private var summonMagnifier = false
+
     private func showMagnifier(at p: CGPoint, sizeText: String?) {
         magnifier.sizeText = sizeText
+        // Always sampled, so C copies the color under the pointer even with the loupe hidden.
         magnifier.update(cursor: p, in: bounds)
-        magnifier.isHidden = false
+        magnifier.isHidden = magnifierHidden && !summonMagnifier
     }
+
+    var testing_magnifierVisible: Bool { !magnifier.isHidden }
+    var testing_magnifier: MagnifierView { magnifier }
 
     private func sizeText(_ r: CGRect) -> String {
         "\(Int(r.width.rounded())) × \(Int(r.height.rounded()))"
@@ -1467,6 +1475,11 @@ final class CaptureView: NSView {
     }
 
     override func flagsChanged(with event: NSEvent) {
+        let option = event.modifierFlags.contains(.option)
+        if magnifierHidden, option != summonMagnifier, !hasSelection {
+            summonMagnifier = option
+            primeCursor()
+        }
         let shift = event.modifierFlags.contains(.shift)
         if shift, !shiftDown, !magnifier.isHidden, case .none = drag {
             StyleMemory.hexColor.toggle()

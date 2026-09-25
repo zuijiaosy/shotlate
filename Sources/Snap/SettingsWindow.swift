@@ -25,6 +25,9 @@ final class SettingsModel: ObservableObject {
     @Published var captureCursor = Settings.shared.captureCursor
     @Published var detectElements = Settings.shared.detectElements
     @Published var superSnip = Settings.shared.superSnip
+    @Published var magnifierZoom = Settings.shared.magnifierZoom
+    @Published var magnifierGrid = Settings.shared.magnifierGrid
+    @Published var magnifierHidden = Settings.shared.magnifierHidden
     @Published var superSnipError: String?
     @Published var accessibilityTrusted = ElementCollector.isTrusted
     @Published var autoSave = Settings.shared.autoSave
@@ -73,6 +76,9 @@ final class SettingsModel: ObservableObject {
         s.captureCursor = captureCursor
         s.detectElements = detectElements
         s.superSnip = superSnip
+        s.magnifierZoom = magnifierZoom
+        s.magnifierGrid = magnifierGrid
+        s.magnifierHidden = magnifierHidden
         if !SuperSnip.shared.setEnabled(superSnip) {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
@@ -232,6 +238,16 @@ struct SettingsView: View {
                 .help("{app} 是截图时位于前台的应用，大括号里的其他内容是日期格式，例如 {yyyyMMdd_HHmmss}")
                 Toggle("复制或贴图时也自动保存", isOn: $model.autoSave)
                 Toggle("默认截取鼠标指针（截图时按 ` 切换）", isOn: $model.captureCursor)
+                Picker("放大镜", selection: $model.magnifierZoom) {
+                    Text("4 倍").tag(4)
+                    Text("8 倍").tag(8)
+                    Text("12 倍").tag(12)
+                }
+                .pickerStyle(.segmented)
+                .disabled(model.magnifierHidden)
+                Toggle("放大镜显示像素网格", isOn: $model.magnifierGrid)
+                    .disabled(model.magnifierHidden)
+                Toggle("隐藏放大镜（按住 ⌥ 临时显示）", isOn: $model.magnifierHidden)
                 Toggle("超级截图：按住 \(SuperSnip.label) 直接框选截图", isOn: $model.superSnip)
                 if let error = model.superSnipError {
                     Text(error).font(.callout).foregroundStyle(.red)

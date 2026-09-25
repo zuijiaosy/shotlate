@@ -190,6 +190,23 @@ final class Settings {
         set { defaults.set(newValue, forKey: "capture.detectElements") }
     }
 
+    /// Pixels shown per screen pixel in the capture loupe: 4, 8 or 12.
+    var magnifierZoom: Int {
+        get { defaults.object(forKey: "magnifier.zoom") as? Int ?? 8 }
+        set { defaults.set(newValue, forKey: "magnifier.zoom") }
+    }
+
+    var magnifierGrid: Bool {
+        get { defaults.object(forKey: "magnifier.grid") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "magnifier.grid") }
+    }
+
+    /// Hide the loupe entirely; holding ⌥ still shows it while choosing an area.
+    var magnifierHidden: Bool {
+        get { defaults.bool(forKey: "magnifier.hidden") }
+        set { defaults.set(newValue, forKey: "magnifier.hidden") }
+    }
+
     /// ⌥⌘ + drag anywhere starts a capture of that area.
     var superSnip: Bool {
         get { defaults.bool(forKey: "capture.superSnip") }

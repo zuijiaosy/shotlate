@@ -49,6 +49,7 @@ enum FeatureChecks {
         ("pin-multi", pinMulti),
         ("super-snip", superSnip),
         ("print", printing),
+        ("loupe", loupe),
     ]
 
     @MainActor
@@ -1243,5 +1244,30 @@ enum FeatureChecks {
             let box = page.getBoxRect(.mediaBox)
             expect(box.width > box.height, "a wide image prints in landscape (\(box.size))")
         }
+    }
+
+    @MainActor static func loupe() async {
+        let settings = Settings.shared
+        defer { settings.magnifierZoom = 8; settings.magnifierHidden = false; settings.magnifierGrid = true }
+        settings.magnifierZoom = 4
+        var h = CaptureHarness()
+        expect(h.view.testing_magnifier.cellSize == 4 && h.view.testing_magnifier.cells == 31, "4× shows more pixels (\(h.view.testing_magnifier.cells))")
+        settings.magnifierZoom = 12
+        h = CaptureHarness()
+        expect(h.view.testing_magnifier.cells == 11 && h.view.testing_magnifier.frame.width == 132, "12× shows fewer, bigger pixels")
+
+        settings.magnifierHidden = true
+        h = CaptureHarness()
+        h.view.mouseMoved(with: h.mouse(.mouseMoved, CGPoint(x: 70, y: 70)))
+        expect(!h.view.testing_magnifierVisible, "hidden in settings: no loupe while choosing")
+        expect(h.view.testing_magnifier.colorString == "#FFFFFF", "the pixel under the pointer is still sampled for C (\(h.view.testing_magnifier.colorString))")
+        let option = NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: .option, timestamp: 0, windowNumber: 0, context: nil,
+                                      characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 58)!
+        h.view.flagsChanged(with: option)
+        expect(h.view.testing_magnifierVisible, "holding ⌥ shows it")
+        let release = NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                                       characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 58)!
+        h.view.flagsChanged(with: release)
+        expect(!h.view.testing_magnifierVisible, "releasing ⌥ hides it again")
     }
 }
