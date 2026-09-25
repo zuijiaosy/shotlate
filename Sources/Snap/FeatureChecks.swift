@@ -21,6 +21,7 @@ enum FeatureChecks {
         ("highlighter", highlighter),
         ("eraser", eraser),
         ("polyline", polyline),
+        ("copy-file", copyAsFile),
     ]
 
     @MainActor
@@ -299,5 +300,30 @@ enum FeatureChecks {
             expect(abs(points[1].y - 130) < 0.5, "a corner handle moves just that corner (y \(points[1].y))")
         }
         h.screenshot().map { write($0, "polyline-overlay.png") }
+    }
+
+    @MainActor static func copyAsFile() async {
+        let pb = NSPasteboard(name: NSPasteboard.Name("app.snap.check"))
+        let rep = sampleRep()
+        Exporter.copy(rep, to: pb, asFile: false)
+        expect(pb.data(forType: .png) != nil && pb.string(forType: .fileURL) == nil, "plain copy has the image and no file")
+        let pasted = pb.readObjects(forClasses: [NSImage.self])?.first as? NSImage
+        expect(pasted?.size == rep.size, "a 2x image pastes back at its point size (\(String(describing: pasted?.size)) vs \(rep.size))")
+
+        Exporter.copy(rep, to: pb, asFile: true)
+        expect(pb.data(forType: .png) != nil, "copy as file still has the image")
+        let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        expect(urls.count == 1, "copy as file adds one file URL")
+        if let url = urls.first {
+            let data = try? Data(contentsOf: url)
+            expect(url.pathExtension == "png" && data?.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]), "the file exists and is a PNG (\(url.lastPathComponent))")
+            expect(url.path.hasPrefix(Exporter.clipboardDirectory.path), "the file lives in Snap's clipboard cache")
+        }
+        expect(pb.pasteboardItems?.count == 1, "image and file are one pasteboard item, so apps don't paste twice")
+        // Pinning the clipboard back reads the file and gets the same picture.
+        let before = PinManager.shared.pins.count
+        PinManager.shared.pinClipboard(pb)
+        expect(PinManager.shared.pins.count == before + 1, "a copied-as-file image can be pinned again")
+        PinManager.shared.closeAll()
     }
 }

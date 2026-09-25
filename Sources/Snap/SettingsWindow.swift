@@ -17,6 +17,7 @@ final class SettingsModel: ObservableObject {
     @Published var togglePinsShortcut = Settings.shared.togglePinsShortcut
     @Published var recording: ShortcutTarget?
     @Published var playSound = Settings.shared.playSound
+    @Published var copyAsFile = Settings.shared.copyAsFile
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
     @Published var loginItemError: String?
     @Published var testResult: String?
@@ -41,6 +42,7 @@ final class SettingsModel: ObservableObject {
         s.pinClipboardShortcut = pinShortcut
         s.togglePinsShortcut = togglePinsShortcut
         s.playSound = playSound
+        s.copyAsFile = copyAsFile
         applyLaunchAtLogin()
         NotificationCenter.default.post(name: Settings.didChange, object: nil)
         savedMessage = "已保存"
@@ -173,6 +175,8 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 Toggle("完成截图时播放音效", isOn: $model.playSound)
+                Toggle("复制图片时同时复制为文件", isOn: $model.copyAsFile)
+                    .help("开启后可以在访达里直接 ⌘V 粘贴成 PNG 文件。有的聊天软件会因此把图片当成文件发送。")
             }
 
             Section("通用") {

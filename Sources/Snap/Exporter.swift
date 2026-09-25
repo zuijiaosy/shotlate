@@ -72,12 +72,41 @@ enum Exporter {
         }
     }
 
-    static func copy(_ rep: NSBitmapImageRep) {
-        let pasteboard = NSPasteboard.general
+    /// Puts the image on the pasteboard. With "copy as file" on, the same item also carries a PNG file,
+    /// so pasting into Finder creates a file while chat apps still paste the image.
+    static func copy(_ rep: NSBitmapImageRep, to pasteboard: NSPasteboard = .general, asFile: Bool = Settings.shared.copyAsFile) {
         pasteboard.clearContents()
-        let image = NSImage(size: rep.size)
-        image.addRepresentation(rep)
-        pasteboard.writeObjects([image])
+        let item = NSPasteboardItem()
+        let png = rep.representation(using: .png, properties: [:])
+        if let png { item.setData(png, forType: .png) }
+        if let tiff = rep.tiffRepresentation { item.setData(tiff, forType: .tiff) }
+        if asFile, let png, let url = try? clipboardFile(png) {
+            item.setString(url.absoluteString, forType: .fileURL)
+        }
+        pasteboard.writeObjects([item])
+    }
+
+    /// Files handed out through the clipboard live in Caches and are cleaned up after a day.
+    static var clipboardDirectory: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("app.snap.Snap/Clipboard", isDirectory: true)
+    }
+
+    private static func clipboardFile(_ png: Data) throws -> URL {
+        let fm = FileManager.default
+        let directory = clipboardDirectory
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        let cutoff = Date().addingTimeInterval(-24 * 3600)
+        for old in (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [] {
+            if let date = try? old.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, date < cutoff {
+                try? fm.removeItem(at: old)
+            }
+        }
+        // A folder per copy keeps the friendly file name unique.
+        let folder = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(defaultFileName(format: .png))
+        try png.write(to: url)
+        return url
     }
 
     static func defaultFileName(format: ImageFormat) -> String {

@@ -144,6 +144,12 @@ final class Settings {
         defaults.set(shortcut.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: key)
     }
 
+    /// Also put a PNG file on the clipboard when copying, so it can be pasted into Finder.
+    var copyAsFile: Bool {
+        get { defaults.bool(forKey: "output.copyAsFile") }
+        set { defaults.set(newValue, forKey: "output.copyAsFile") }
+    }
+
     var playSound: Bool {
         get { defaults.bool(forKey: "output.sound") }
         set { defaults.set(newValue, forKey: "output.sound") }
