@@ -35,6 +35,7 @@ enum FeatureChecks {
         ("cursor", cursorCapture),
         ("refresh", refreshCapture),
         ("scan-code", scanCode),
+        ("share", shareFile),
     ]
 
     @MainActor
@@ -815,5 +816,19 @@ enum FeatureChecks {
         let blank = sampleRep(CGSize(width: 400, height: 300), color: .white).cgImage!
         let none = await CodeScanner.scan([blank])
         expect(none.isEmpty, "a screen without codes finds nothing")
+    }
+
+    @MainActor static func shareFile() async {
+        let rep = sampleRep(CGSize(width: 120, height: 80))
+        guard let url = try? ShareController.file(for: rep) else { return expect(false, "share file is written") }
+        let data = try? Data(contentsOf: url)
+        expect(url.pathExtension == "png" && data?.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]), "shares a PNG file (\(url.lastPathComponent))")
+        let back = data.flatMap(NSBitmapImageRep.init(data:))
+        expect(back?.pixelsWide == rep.pixelsWide, "at full resolution")
+        let items = NSSharingService.sharingServices(forItems: [url])
+        expect(!items.isEmpty, "the system offers share services for it (\(items.count))")
+        let toolbar = ToolbarView { _ in }
+        expect(toolbar.subviews.first.map { $0.subviews.contains { ($0 as? NSButton)?.toolTip?.hasPrefix("分享") == true } } ?? false,
+               "the capture toolbar has a share button")
     }
 }

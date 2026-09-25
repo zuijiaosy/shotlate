@@ -458,6 +458,10 @@ final class PinWindow: NSPanel {
 
     @objc func closeFromMenu() { close(keepInHistory: true) }
 
+    @objc func share() {
+        ShareController.share(rep, relativeTo: pinView)
+    }
+
     @objc func toggleSolo() { PinManager.shared.toggleSolo(self) }
 
     @objc func moveToGroup(_ sender: NSMenuItem) {
@@ -544,6 +548,7 @@ final class PinWindow: NSPanel {
         }
         menu.addItem(item("保存", #selector(saveImage), "s"))
         menu.addItem(item("识别文字", #selector(recognizeText)))
+        menu.addItem(item("分享…", #selector(share)))
         menu.addItem(.separator())
         menu.addItem(item(thumbnail == nil ? "缩略图" : "恢复原大小", #selector(toggleThumbnail)))
 

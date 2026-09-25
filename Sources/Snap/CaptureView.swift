@@ -1496,6 +1496,8 @@ final class CaptureView: NSView {
             session?.cancel()
         case .save:
             finish(NSEvent.modifierFlags.contains(.shift) ? .saveAs : .save)
+        case .share:
+            shareSelection()
         case .done:
             finish(.copy)
         }
@@ -1682,6 +1684,17 @@ final class CaptureView: NSView {
         Sound.playCapture()
         PinManager.shared.pin(rep, frame: frame)
         if let saved { HUD.show("已贴图，并自动保存到 \(saved)", on: window?.screen) }
+    }
+
+    /// Closes the overlay (it sits above menus) and opens the share menu where the selection was.
+    private func shareSelection() {
+        commitText()
+        endChange()
+        guard hasSelection, let rect = selectionOnScreen, let rep = exportImage(format: .png) else { return }
+        StyleMemory.lastSelection[displayID] = selection
+        session?.record(self)
+        session?.finish()
+        ShareController.share(rep, at: rect)
     }
 
     /// Hands the selected region to the long-screenshot controller. Annotations are not carried over.

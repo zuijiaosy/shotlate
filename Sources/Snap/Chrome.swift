@@ -162,7 +162,7 @@ private func separator(height: CGFloat = 18) -> NSView {
 }
 
 enum ToolbarAction {
-    case tool(Tool), undo, redo, ocr, translate, pin, longCapture, cancel, save, done
+    case tool(Tool), undo, redo, ocr, translate, pin, longCapture, cancel, save, share, done
 }
 
 /// Bottom toolbar: annotation tools | undo, redo | OCR, translate | cancel, save, done.
@@ -202,6 +202,7 @@ final class ToolbarView: PanelView {
         addSeparator()
         stack.addArrangedSubview(ChromeButton(image: symbolImage("xmark"), tooltip: "退出截图  Esc") { handler(.cancel) })
         stack.addArrangedSubview(ChromeButton(image: symbolImage("square.and.arrow.down"), tooltip: "保存  ⌘S\n另存为  ⇧⌘S") { handler(.save) })
+        stack.addArrangedSubview(ChromeButton(image: symbolImage("square.and.arrow.up"), tooltip: "分享：隔空投送、邮件、信息、备忘录…") { handler(.share) })
         let done = ChromeButton(image: symbolImage("checkmark", weight: .semibold), tooltip: "复制到剪贴板  Return / 双击选区") { handler(.done) }
         done.tint = selectionBlue
         stack.addArrangedSubview(done)
