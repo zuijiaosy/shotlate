@@ -2,10 +2,36 @@ import AppKit
 import CoreImage
 import SnapCore
 
-/// Style choices remembered across captures while the app runs.
+/// Style choices remembered across captures. Color and size are kept per tool, and saved across launches.
 enum StyleMemory {
-    static var color: NSColor = StyleState.palette[0]
-    static var sizes: [Tool: CGFloat] = [:]
+    private static let defaults = UserDefaults.standard
+
+    /// Red for most tools; the highlighter starts yellow.
+    static func defaultColor(for tool: Tool) -> NSColor {
+        tool == .highlighter ? StyleState.palette[2] : StyleState.palette[0]
+    }
+
+    static func color(for tool: Tool) -> NSColor {
+        guard let rgba = (defaults.dictionary(forKey: "style.colors") as? [String: [Double]])?[tool.rawValue], rgba.count == 4 else {
+            return defaultColor(for: tool)
+        }
+        return NSColor(srgbRed: rgba[0], green: rgba[1], blue: rgba[2], alpha: rgba[3])
+    }
+
+    static func setColor(_ color: NSColor, for tool: Tool) {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        var all = defaults.dictionary(forKey: "style.colors") as? [String: [Double]] ?? [:]
+        all[tool.rawValue] = [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent].map(Double.init)
+        defaults.set(all, forKey: "style.colors")
+    }
+
+    static var sizes: [Tool: CGFloat] {
+        get {
+            let raw = defaults.dictionary(forKey: "style.sizes") as? [String: Double] ?? [:]
+            return Dictionary(uniqueKeysWithValues: raw.compactMap { key, value in Tool(rawValue: key).map { ($0, CGFloat(value)) } })
+        }
+        set { defaults.set(Dictionary(uniqueKeysWithValues: newValue.map { ($0.key.rawValue, Double($0.value)) }), forKey: "style.sizes") }
+    }
     static var mosaicMode: MosaicMode = .brush
     static var eraserMode: MosaicMode = .brush
     static var mosaicEffect: MosaicEffect = .pixelate
@@ -82,7 +108,7 @@ final class CaptureView: NSView {
     private var polyPoints: [CGPoint]?
     private var textEditor: TextEditorView?
     private var editingID: UUID?
-    private var editingColor = StyleMemory.color
+    private var editingColor = StyleMemory.color(for: .text)
     private var editingSize = StyleMemory.size(for: .text)
 
     private var cornerRadius = CGFloat(Settings.shared.cornerRadius)
@@ -714,9 +740,21 @@ final class CaptureView: NSView {
         guard abs(scrollAccumulator) >= 1 else { return }
         let steps = scrollAccumulator.rounded(.towardZero)
         scrollAccumulator -= steps
+        if event.modifierFlags.contains(.option) {
+            adjustOpacity(by: steps * 0.1, tool: tool)
+            return
+        }
         let unit: CGFloat = tool.usesAreaModes || tool == .highlighter || tool == .text || tool == .number ? 2 : 1
         let current = currentStyle?.size ?? tool.defaultSize
         applyStyle(.size(current + steps * unit), coalesce: true)
+    }
+
+    /// ⌥ + wheel: opacity of the color, like Snipaste's scroll on the color button.
+    private func adjustOpacity(by delta: CGFloat, tool: Tool) {
+        guard !tool.usesAreaModes, let color = currentStyle?.color else { return }
+        let alpha = min(1, max(0.1, ((color.alphaComponent + delta) * 10).rounded() / 10))
+        applyStyle(.color(color.withAlphaComponent(alpha)), coalesce: true)
+        showToast("不透明度 \(Int((alpha * 100).rounded()))%", duration: 0.8)
     }
 
     /// Resizing with a locked ratio: corners keep the opposite corner fixed, edges keep the top-left fixed.
@@ -827,7 +865,7 @@ final class CaptureView: NSView {
     }
 
     private func beginAnnotation(_ tool: Tool, at p: CGPoint) {
-        let color = StyleMemory.color
+        let color = StyleMemory.color(for: tool)
         let size = StyleMemory.size(for: tool)
         switch tool {
         case .text:
@@ -931,7 +969,7 @@ final class CaptureView: NSView {
         let old = draft?.bounds ?? .null
         let end = polylineEnd(from: points.last, to: cursor, shift: NSEvent.modifierFlags.contains(.shift))
         draft = AnnotationItem(shape: .polyline(points + [end], arrow: tool == .arrow),
-                               color: StyleMemory.color, size: StyleMemory.size(for: tool ?? .line))
+                               color: StyleMemory.color(for: tool ?? .line), size: StyleMemory.size(for: tool ?? .line))
         invalidate(old, draft?.bounds ?? .null, margin: 4 + (draft?.size ?? 0))
     }
 
@@ -957,7 +995,7 @@ final class CaptureView: NSView {
         }
         let old = draft?.bounds ?? .null
         draft = nil
-        let item = AnnotationItem(shape: .polyline(points, arrow: tool == .arrow), color: StyleMemory.color,
+        let item = AnnotationItem(shape: .polyline(points, arrow: tool == .arrow), color: StyleMemory.color(for: tool ?? .line),
                                   size: StyleMemory.size(for: tool ?? .line))
         if item.isMeaningful {
             mutate { items.append(item) }
@@ -992,7 +1030,7 @@ final class CaptureView: NSView {
             editingID = existing.id
             selectedID = nil
         } else {
-            editingColor = StyleMemory.color
+            editingColor = StyleMemory.color(for: .text)
             editingSize = StyleMemory.size(for: .text)
             origin.y -= editingSize * 0.6
         }
@@ -1051,7 +1089,7 @@ final class CaptureView: NSView {
                               mosaicMode: item.shape.isMosaicBrush ? .brush : .rect, mosaicEffect: item.effect)
         }
         guard let tool else { return nil }
-        return StyleState(tool: tool, color: StyleMemory.color, size: StyleMemory.size(for: tool),
+        return StyleState(tool: tool, color: StyleMemory.color(for: tool), size: StyleMemory.size(for: tool),
                           mosaicMode: StyleMemory.areaMode(for: tool), mosaicEffect: StyleMemory.areaEffect(for: tool))
     }
 
@@ -1072,6 +1110,11 @@ final class CaptureView: NSView {
             return
         }
         guard let styleTool = textEditor != nil ? .text : selectedTool ?? tool else { return }
+        var action = action
+        if case let .color(c) = action, !coalesce, let current = currentStyle?.color, c.alphaComponent == 1 {
+            // Picking a swatch keeps the opacity set with ⌥ + wheel.
+            action = .color(c.withAlphaComponent(current.alphaComponent))
+        }
         var clampedSize: CGFloat?
         if case let .size(value) = action {
             let range = styleTool.sizeRange
@@ -1081,7 +1124,7 @@ final class CaptureView: NSView {
         // Remember the choice for the next annotation of this kind.
         switch action {
         case .size: StyleMemory.sizes[styleTool] = clampedSize
-        case let .color(c): StyleMemory.color = c
+        case let .color(c): StyleMemory.setColor(c, for: styleTool)
         case let .mosaicMode(m):
             if styleTool == .eraser { StyleMemory.eraserMode = m } else { StyleMemory.mosaicMode = m }
         case let .mosaicEffect(e): StyleMemory.mosaicEffect = e
@@ -1112,7 +1155,7 @@ final class CaptureView: NSView {
         panel.showsAlpha = false
         panel.setTarget(self)
         panel.setAction(#selector(colorPanelChanged(_:)))
-        panel.color = currentStyle?.color ?? StyleMemory.color
+        panel.color = currentStyle?.color ?? StyleMemory.color(for: tool ?? .rectangle)
         panel.orderFront(nil)
     }
 

@@ -29,6 +29,7 @@ enum FeatureChecks {
         ("pin-groups", pinGroups),
         ("pin-restore", pinRestore),
         ("selection-size", selectionSize),
+        ("tool-colors", toolColors),
     ]
 
     @MainActor
@@ -190,16 +191,15 @@ enum FeatureChecks {
         let h = CaptureHarness()
         h.select(CGRect(x: 40, y: 40, width: 600, height: 360))
         h.key("h", code: 4)
-        StyleMemory.color = StyleState.palette[2] // yellow
+        StyleMemory.setColor(StyleState.palette[2], for: .highlighter)
         // Across the first text line, then a straight ⇧ stroke that ends off-axis and should snap to horizontal.
         h.drag(CGPoint(x: 80, y: 88), CGPoint(x: 400, y: 90))
         h.drag(CGPoint(x: 80, y: 150), CGPoint(x: 400, y: 158), flags: .shift)
         // A red rectangle first, then a marker across it: the rectangle must survive under the marker.
         h.key("r", code: 15)
-        StyleMemory.color = StyleState.palette[0]
+        StyleMemory.setColor(StyleState.palette[0], for: .rectangle)
         h.drag(CGPoint(x: 450, y: 180), CGPoint(x: 520, y: 240))
         h.key("h", code: 4)
-        StyleMemory.color = StyleState.palette[2]
         h.drag(CGPoint(x: 420, y: 180), CGPoint(x: 560, y: 180))
         guard let rep = h.export() else { return expect(false, "export") }
         write(rep, "highlighter.png")
@@ -227,7 +227,7 @@ enum FeatureChecks {
     @MainActor static func eraser() async {
         let h = CaptureHarness()
         h.select(CGRect(x: 40, y: 40, width: 600, height: 360))
-        StyleMemory.color = StyleState.palette[0]
+        StyleMemory.setColor(StyleState.palette[0], for: .rectangle)
         h.key("r", code: 15)
         h.drag(CGPoint(x: 100, y: 100), CGPoint(x: 400, y: 250))
         h.key("e", code: 14)
@@ -259,7 +259,8 @@ enum FeatureChecks {
     @MainActor static func polyline() async {
         let h = CaptureHarness()
         h.select(CGRect(x: 40, y: 40, width: 600, height: 360))
-        StyleMemory.color = StyleState.palette[4]
+        StyleMemory.setColor(StyleState.palette[4], for: .line)
+        StyleMemory.setColor(StyleState.palette[4], for: .arrow)
         h.key("l", code: 37)
         h.click(CGPoint(x: 100, y: 100))
         h.click(CGPoint(x: 300, y: 100))
@@ -382,7 +383,8 @@ enum FeatureChecks {
         // Draw on a capture, then keep it.
         let h = CaptureHarness()
         h.select(CGRect(x: 40, y: 40, width: 400, height: 250))
-        StyleMemory.color = StyleState.palette[0]
+        StyleMemory.setColor(StyleState.palette[0], for: .rectangle)
+        StyleMemory.setColor(StyleState.palette[0], for: .arrow)
         h.key("r", code: 15)
         h.drag(CGPoint(x: 100, y: 100), CGPoint(x: 300, y: 200))
         h.key("a", code: 0)
@@ -614,5 +616,42 @@ enum FeatureChecks {
         h.view.testing_setRatio(AspectRatio("4:3"))
         expect(h.view.testing_selection?.size == CGSize(width: 300, height: 225), "choosing a ratio reshapes the current selection")
         expect(StyleMemory.aspectRatio == AspectRatio("4:3"), "the chosen ratio is remembered")
+    }
+
+    @MainActor static func toolColors() async {
+        UserDefaults.standard.removeObject(forKey: "style.colors")
+        UserDefaults.standard.removeObject(forKey: "style.sizes")
+        expect(StyleMemory.color(for: .highlighter).isApproximately(StyleState.palette[2]), "highlighter starts yellow")
+        expect(StyleMemory.color(for: .rectangle).isApproximately(StyleState.palette[0]), "other tools start red")
+
+        let h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 600, height: 360))
+        h.key("r", code: 15)
+        h.view.testing_applyStyle(.color(StyleState.palette[3]))
+        h.view.testing_applyStyle(.size(8))
+        h.key("a", code: 0)
+        h.view.testing_applyStyle(.color(StyleState.palette[5]))
+        h.key("r", code: 15)
+        h.drag(CGPoint(x: 100, y: 100), CGPoint(x: 200, y: 200))
+        let rect = h.view.testing_items.last
+        expect(rect?.color.isApproximately(StyleState.palette[3]) == true && rect?.size == 8, "rectangle keeps its own green and size 8")
+        h.key("a", code: 0)
+        h.drag(CGPoint(x: 300, y: 100), CGPoint(x: 400, y: 200))
+        expect(h.view.testing_items.last?.color.isApproximately(StyleState.palette[5]) == true, "arrow keeps its own purple")
+        expect(StyleMemory.color(for: .rectangle).isApproximately(StyleState.palette[3]) && StyleMemory.size(for: .rectangle) == 8,
+               "choices are saved for the next launch")
+
+        // ⌥ + wheel lowers the opacity of the selected arrow.
+        for _ in 0..<3 {
+            let wheel = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: -1, wheel2: 0, wheel3: 0)!
+            wheel.flags = .maskAlternate
+            h.view.scrollWheel(with: NSEvent(cgEvent: wheel)!)
+        }
+        let alpha = h.view.testing_items.last?.color.alphaComponent ?? 1
+        expect(abs(alpha - 0.7) < 0.01, "⌥ + wheel lowers opacity in 10% steps (\(alpha))")
+        h.view.testing_applyStyle(.color(StyleState.palette[4]))
+        let after = h.view.testing_items.last?.color
+        expect(after?.isApproximately(StyleState.palette[4]) == true && abs((after?.alphaComponent ?? 1) - 0.7) < 0.01, "picking a swatch keeps the opacity")
+        h.export().map { write($0, "tool-colors.png") }
     }
 }
