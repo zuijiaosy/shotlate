@@ -39,6 +39,7 @@ final class PinManager {
         refreshVisibility()
         window.orderFrontRegardless()
         window.makeKey()
+        window.prepareText()
         return window
     }
 
@@ -321,6 +322,7 @@ final class PinWindow: NSPanel {
     override func becomeKey() {
         super.becomeKey()
         pinView.needsDisplay = true
+        prepareText()
     }
 
     override func resignKey() {
@@ -429,7 +431,7 @@ final class PinWindow: NSPanel {
         } else if flags == .command && key == "a" {
             PinManager.shared.selectAllShown()
         } else if event.keyCode == 53 {
-            close(keepInHistory: true)
+            cancelOperation(nil)
         } else if flags.isEmpty, key == " " {
             annotate()
         } else if flags.isEmpty, key == "y" {
@@ -443,7 +445,7 @@ final class PinWindow: NSPanel {
         } else if flags == [.command, .shift] && key == "c" {
             copyText()
         } else if flags == .command && key == "c" {
-            copyImage()
+            if pinView.selectedText != nil { copySelectedText() } else { copyImage() }
         } else if flags == .command && key == "s" {
             saveImage()
         } else if (flags.isEmpty || flags == .command) && key == "0" {
@@ -456,8 +458,13 @@ final class PinWindow: NSPanel {
         }
     }
 
+    /// `Esc` first drops a text selection, then closes the pin.
     override func cancelOperation(_ sender: Any?) {
-        close(keepInHistory: true)
+        if pinView.textSelection != nil {
+            pinView.textSelection = nil
+        } else {
+            close(keepInHistory: true)
+        }
     }
 
     /// Same number keys as Snipaste: 1/2 rotate clockwise/counter-clockwise, 3/4 flip horizontally/vertically.
@@ -519,6 +526,13 @@ final class PinWindow: NSPanel {
         pinView.flash("已复制文字")
     }
 
+    @objc func copySelectedText() {
+        guard let text = pinView.selectedText else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        pinView.flash("已复制文字")
+    }
+
     @objc func saveImage() {
         do {
             let url = try Exporter.save(displayedRep, format: Settings.shared.imageFormat, directory: Settings.shared.saveDirectory)
@@ -563,6 +577,34 @@ final class PinWindow: NSPanel {
     }
 
     @objc func closeFromMenu() { close(keepInHistory: true) }
+
+    // MARK: Text selection
+
+    /// The picture the text layout was (or is being) recognized from.
+    private var textSource: NSBitmapImageRep?
+    private var textTask: Task<Void, Never>?
+
+    /// Recognizes the pin's text in the background so it can be selected with the mouse; once per picture.
+    /// Restored pins wait until they are hovered or clicked, so a launch with many pins doesn't run OCR on all of them.
+    func prepareText() {
+        guard textSource !== rep, let cg = rep.cgImage else { return }
+        let source = rep
+        textSource = source
+        pinView.textLayout = nil
+        textTask?.cancel()
+        textTask = Task { @MainActor [weak self] in
+            let layout = try? await TextRecognizer.layout(cg, bounds: CGRect(origin: .zero, size: source.size))
+            guard let self, !Task.isCancelled, self.rep === source else { return }
+            self.pinView.textLayout = layout
+        }
+    }
+
+    /// The picture's pixels moved (rotated, replaced, translated): the old text layout no longer fits.
+    private func pictureChanged() {
+        textSource = nil
+        pinView.textLayout = nil
+        prepareText()
+    }
 
     // MARK: Translation
 
@@ -611,6 +653,7 @@ final class PinWindow: NSPanel {
         rep = newRep
         id = UUID()
         refreshImage()
+        pictureChanged()
         PinStore.shared.scheduleSave()
     }
 
@@ -631,6 +674,7 @@ final class PinWindow: NSPanel {
         id = UUID()
         baseSize = newRep.size
         refreshImage()
+        pictureChanged()
         setZoom(zoomNow, anchor: CGPoint(x: frame.minX, y: frame.maxY), flash: false)
         PinStore.shared.scheduleSave()
     }
@@ -708,6 +752,7 @@ final class PinWindow: NSPanel {
         id = UUID()
         if rotates { baseSize = CGSize(width: baseSize.height, height: baseSize.width) }
         refreshImage()
+        pictureChanged()
         setZoom(zoom)
     }
 
@@ -719,7 +764,12 @@ final class PinWindow: NSPanel {
             item.tag = tag
             return item
         }
-        menu.addItem(item("复制", #selector(copyImage), "c"))
+        if pinView.selectedText != nil {
+            menu.addItem(item("复制选中文字", #selector(copySelectedText), "c"))
+            menu.addItem(item("复制图片", #selector(copyImage)))
+        } else {
+            menu.addItem(item("复制", #selector(copyImage), "c"))
+        }
         if sourceText != nil {
             let copyTextItem = item("复制文字", #selector(copyText), "c")
             copyTextItem.keyEquivalentModifierMask = [.command, .shift]
@@ -828,11 +878,17 @@ final class PinView: NSView {
     /// Right-drag box that becomes a thumbnail, in view points.
     private var regionStart: CGPoint?
     private var region: CGRect? { didSet { needsDisplay = true } }
+    /// The picture's recognized text, in image points; nil until recognized or when there is none.
+    var textLayout: TextLayout? { didSet { textSelection = nil } }
+    var textSelection: TextSpan? { didSet { needsDisplay = true } }
+    private var selectingText = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         wantsLayer = true
         addSubview(label)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
         registerForDraggedTypes([.fileURL, .URL, .png, .tiff, .string])
     }
 
@@ -874,6 +930,10 @@ final class PinView: NSView {
             image.draw(in: bounds, from: source, operation: background.checker == nil ? .copy : .sourceOver, fraction: 1,
                        respectFlipped: true, hints: nil)
         }
+        if thumbnail == nil, let textSelection, let textLayout {
+            selectionBlue.withAlphaComponent(0.3).setFill()
+            for rect in textLayout.rects(for: textSelection) { NSBezierPath(rect: viewRect(rect)).fill() }
+        }
         if let region {
             let path = NSBezierPath(rect: region.insetBy(dx: 0.5, dy: 0.5))
             NSColor.white.withAlphaComponent(0.8).setStroke()
@@ -898,17 +958,29 @@ final class PinView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeKey()
-        if event.clickCount == 2 {
-            let p = convert(event.locationInWindow, from: nil)
+        let p = convert(event.locationInWindow, from: nil)
+        if event.clickCount >= 2 {
+            // Closing is Esc's job; double-click selects a word, triple-click the line.
             if window_?.thumbnail != nil {
                 window_?.exitThumbnail()
             } else if event.modifierFlags.contains(.shift) {
                 window_?.enterFixedThumbnail(around: p)
-            } else {
-                window_?.close(keepInHistory: true)
+            } else if let layout = textLayout, textPosition(at: p) != nil {
+                textSelection = event.clickCount == 2 ? layout.word(at: imagePoint(p)) : layout.line(at: imagePoint(p))
             }
             return
         }
+        // Pressing on text selects it, like a text field; anywhere else drags the pin as before.
+        if !event.modifierFlags.contains(.command), let position = textPosition(at: p) {
+            if event.modifierFlags.contains(.shift), let current = textSelection {
+                textSelection = TextSpan(anchor: current.anchor, focus: position)
+            } else {
+                textSelection = TextSpan(anchor: position, focus: position)
+            }
+            selectingText = true
+            return
+        }
+        textSelection = nil
         guard let pin = window_ else { return }
         if event.modifierFlags.contains(.command) {
             PinManager.shared.toggleSelection(pin)
@@ -920,7 +992,52 @@ final class PinView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if selectingText {
+            extendTextSelection(to: convert(event.locationInWindow, from: nil))
+            return
+        }
         drag(to: NSEvent.mouseLocation, snapping: event.modifierFlags.contains(.shift))
+    }
+
+    // MARK: Text
+
+    var selectedText: String? {
+        guard let textSelection, let textLayout else { return nil }
+        let text = textLayout.text(for: textSelection)
+        return text.isEmpty ? nil : text
+    }
+
+    /// The part of the image on screen, in image points with a top-left origin.
+    private var shownImageRect: CGRect { thumbnail ?? CGRect(origin: .zero, size: image?.size ?? bounds.size) }
+
+    private func imagePoint(_ p: CGPoint) -> CGPoint {
+        let shown = shownImageRect
+        return CGPoint(x: shown.minX + p.x * shown.width / max(bounds.width, 1), y: shown.minY + p.y * shown.height / max(bounds.height, 1))
+    }
+
+    private func viewRect(_ r: CGRect) -> CGRect {
+        let shown = shownImageRect
+        let sx = bounds.width / max(shown.width, 1), sy = bounds.height / max(shown.height, 1)
+        return CGRect(x: (r.minX - shown.minX) * sx, y: (r.minY - shown.minY) * sy, width: r.width * sx, height: r.height * sy)
+    }
+
+    /// The caret under a view point when it is on recognized text; never in a thumbnail.
+    func textPosition(at p: CGPoint) -> TextPosition? {
+        guard thumbnail == nil, let textLayout else { return nil }
+        return textLayout.hitTest(imagePoint(p))
+    }
+
+    func extendTextSelection(to p: CGPoint) {
+        guard let textLayout, let position = textLayout.nearestPosition(to: imagePoint(p)) else { return }
+        textSelection?.focus = position
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        window_?.prepareText()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        (textPosition(at: convert(event.locationInWindow, from: nil)) != nil ? NSCursor.iBeam : NSCursor.openHand).set()
     }
 
     /// Moves the dragged pins; with ⇧ this pin's edges stick to other pins, windows and the screen edges.
@@ -947,6 +1064,8 @@ final class PinView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         dragStart = nil
+        if selectingText, textSelection?.isEmpty == true { textSelection = nil }
+        selectingText = false
     }
 
     override func otherMouseDown(with event: NSEvent) {

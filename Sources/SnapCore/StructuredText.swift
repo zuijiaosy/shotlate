@@ -21,28 +21,50 @@ public enum StructuredText {
     public static func table(_ lines: [OCRLine]) -> [[String]]? {
         let rows = rows(lines)
         guard rows.count >= 2 else { return nil }
-        // Column starts: left edges that recur across rows.
-        var starts: [CGFloat] = []
-        for cell in rows.flatMap({ $0 }).sorted(by: { $0.rect.minX < $1.rect.minX }) {
-            if let last = starts.last, cell.rect.minX - last < 14 { continue }
-            starts.append(cell.rect.minX)
-        }
-        guard starts.count >= 2 else { return nil }
-        var grid = rows.map { row -> [String] in
-            var cells = Array(repeating: "", count: starts.count)
+        let columns = columns(rows)
+        guard columns.count >= 2 else { return nil }
+        let grid = rows.map { row -> [String] in
+            var cells = Array(repeating: "", count: columns.count)
             for cell in row {
-                let column = starts.lastIndex { $0 <= cell.rect.minX + 14 } ?? 0
+                let column = columns.firstIndex { cell.rect.minX <= $0.upperBound && $0.lowerBound <= cell.rect.maxX } ?? 0
                 cells[column] = cells[column].isEmpty ? cell.text : cells[column] + " " + cell.text
             }
             return cells
         }
-        // Drop columns that are empty everywhere, then require most rows to fill most columns.
-        let used = starts.indices.filter { c in grid.contains { !$0[c].isEmpty } }
-        grid = grid.map { row in used.map { row[$0] } }
-        guard used.count >= 2 else { return nil }
+        // Most rows must fill most columns.
         let filled = grid.map { $0.filter { !$0.isEmpty }.count }
-        let fullRows = filled.filter { $0 >= max(2, used.count - 1) }.count
+        let fullRows = filled.filter { $0 >= max(2, columns.count - 1) }.count
         return Double(fullRows) / Double(grid.count) >= 0.6 ? grid : nil
+    }
+
+    /// Column spans: the stretches of x that some cell covers, split wherever no cell does. Cells of one column
+    /// overlap whether they are left-aligned, right-aligned (numbers) or centered, so the empty bands between
+    /// columns are what separates them, not where each cell starts.
+    static func columns(_ rows: [[OCRLine]]) -> [ClosedRange<CGFloat>] {
+        let cells = rows.enumerated().flatMap { r, row in row.map { (row: r, rect: $0.rect) } }
+        let heights = cells.map(\.rect.height).sorted()
+        // Boxes closer than this are one cell that OCR split, like "原始金额合计" and "（元）".
+        let join = heights.isEmpty ? 0 : heights[heights.count / 2] * 0.3
+        var columns: [(span: ClosedRange<CGFloat>, rows: Set<Int>)] = []
+        for cell in cells.sorted(by: { $0.rect.minX < $1.rect.minX }) {
+            if let last = columns.last, cell.rect.minX < last.span.upperBound + join {
+                columns[columns.count - 1] = (last.span.lowerBound...max(last.span.upperBound, cell.rect.maxX), last.rows.union([cell.row]))
+            } else {
+                columns.append((cell.rect.minX...cell.rect.maxX, [cell.row]))
+            }
+        }
+        // Neighbours that never share a row are one column aligned two ways, such as a left-aligned
+        // header over right-aligned numbers.
+        var i = 0
+        while i + 1 < columns.count {
+            if columns[i].rows.isDisjoint(with: columns[i + 1].rows) {
+                columns[i] = (columns[i].span.lowerBound...columns[i + 1].span.upperBound, columns[i].rows.union(columns[i + 1].rows))
+                columns.remove(at: i + 1)
+            } else {
+                i += 1
+            }
+        }
+        return columns.map(\.span)
     }
 
     public static func markdown(_ grid: [[String]]) -> String {

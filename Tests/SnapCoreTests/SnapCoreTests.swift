@@ -662,6 +662,36 @@ import Testing
         #expect(StructuredText.table(lines)?[1] == ["d", "", "f"])
     }
 
+    @Test func rightAlignedAndCenteredColumnsStayTogether() {
+        // Numbers right-aligned in column 2, grades centered in column 3: their left edges differ by far more than a few points.
+        let lines = [
+            cell("Product", 10, 10), cell("Q1 Sales", 140, 10, w: 56), cell("Grade", 240, 10, w: 40),
+            cell("Wireless Mouse", 10, 40, w: 100), cell("12,480", 152, 40, w: 44), cell("A", 255, 40, w: 10),
+            cell("USB-C Hub", 10, 70, w: 72), cell("8,315", 161, 70, w: 35), cell("B+", 252, 70, w: 16),
+        ]
+        #expect(StructuredText.table(lines) == [["Product", "Q1 Sales", "Grade"], ["Wireless Mouse", "12,480", "A"], ["USB-C Hub", "8,315", "B+"]])
+    }
+
+    @Test func spreadsheetWithRightAlignedNumbersAndSplitCells() {
+        // Measured from a real screenshot of a two-column sheet: numbers are right-aligned, and Vision
+        // returned "原始金额合计" and "（元）" as two boxes that touch (the second starts where the first ends).
+        func c(_ t: String, _ x0: CGFloat, _ x1: CGFloat, _ y: CGFloat) -> OCRLine { OCRLine(text: t, rect: CGRect(x: x0, y: y - 14, width: x1 - x0, height: 28)) }
+        let lines = [
+            c("指标", 118, 172, 163), c("数值", 545, 605, 163),
+            c("记录总数", 118, 228, 198), c("190", 765, 820, 198),
+            c("原始金额合计", 118, 283, 237), c("（元）", 284, 345, 237), c("¥16,036.74", 678, 820, 237),
+            c("退款金额合计", 118, 283, 275), c("（元）", 284, 348, 275), c("¥2,411.84", 692, 820, 275),
+            c("已领完记录数", 118, 283, 350), c("154", 770, 820, 350),
+            c("退款/撤回记录数", 118, 316, 389), c("36", 780, 820, 389),
+            c("来源图片", 118, 228, 465), c("记录数", 545, 633, 465),
+            c("1.jpg", 118, 180, 503), c("160", 768, 820, 503),
+        ]
+        let grid = StructuredText.table(lines)
+        #expect(grid?.first == ["指标", "数值"])
+        #expect(grid?[2] == ["原始金额合计 （元）", "¥16,036.74"])
+        #expect(grid?.last == ["1.jpg", "160"])
+    }
+
     @Test func proseIsNotATable() {
         let lines = [OCRLine(text: "A paragraph of text that wraps", rect: CGRect(x: 10, y: 10, width: 300, height: 16)),
                      OCRLine(text: "onto a second line.", rect: CGRect(x: 10, y: 30, width: 180, height: 16))]
@@ -674,5 +704,69 @@ import Testing
                      OCRLine(text: "return 1", rect: CGRect(x: 60, y: 30, width: 80, height: 14)),
                      OCRLine(text: "}", rect: CGRect(x: 20, y: 50, width: 10, height: 14))]
         #expect(StructuredText.indented(lines) == "func f() {\n    return 1\n}")
+    }
+}
+
+@Suite struct TextSelectionTests {
+    /// A line whose characters are each 10pt wide, starting at `x`.
+    func line(_ text: String, x: CGFloat = 0, y: CGFloat) -> GlyphLine {
+        let boxes = text.indices.enumerated().map { n, _ in CGRect(x: x + CGFloat(n) * 10, y: y, width: 10, height: 14) } as [CGRect?]
+        return GlyphLine(text: text, rect: CGRect(x: x, y: y, width: CGFloat(text.count) * 10, height: 14), boxes: boxes)
+    }
+
+    @Test func sharesAWordBoxAcrossItsCharacters() {
+        let word = CGRect(x: 0, y: 0, width: 40, height: 14)
+        let space = CGRect?.none
+        let l = GlyphLine(text: "abcd ef", rect: CGRect(x: 0, y: 0, width: 70, height: 14),
+                          boxes: [word, word, word, word, space, CGRect(x: 50, y: 0, width: 20, height: 14), CGRect(x: 50, y: 0, width: 20, height: 14)])
+        #expect(l.boxes.map(\.minX) == [0, 10, 20, 30, 40, 50, 60])
+        #expect(l.boxes[4].width == 10)
+    }
+
+    @Test func ignoresTheEmptyBoxesVisionGivesSpaces() {
+        let l = GlyphLine(text: "ab c", rect: CGRect(x: 100, y: 0, width: 40, height: 14),
+                          boxes: [CGRect(x: 100, y: 0, width: 10, height: 14), CGRect(x: 110, y: 0, width: 10, height: 14), .zero,
+                                  CGRect(x: 130, y: 0, width: 10, height: 14)])
+        #expect(l.boxes.map(\.minX) == [100, 110, 120, 130])
+    }
+
+    @Test func draggingPastALineEndStaysOnThatLine() {
+        let layout = TextLayout([line("a much longer line", y: 0), line("short", y: 20)])
+        #expect(layout.nearestPosition(to: CGPoint(x: 120, y: 27)) == TextPosition(line: 1, offset: 5))
+        #expect(layout.nearestPosition(to: CGPoint(x: 20, y: 60)) == TextPosition(line: 1, offset: 2))
+    }
+
+    @Test func missingBoxesFallBackToTheLine() {
+        let l = GlyphLine(text: "abcd", rect: CGRect(x: 100, y: 5, width: 40, height: 14), boxes: [])
+        #expect(l.boxes.map(\.minX) == [100, 110, 120, 130])
+        #expect(l.boxes.allSatisfy { $0.minY == 5 && $0.height == 14 })
+    }
+
+    @Test func hitTestFindsTheCaret() {
+        let layout = TextLayout([line("hello", y: 0), line("world", y: 20)])
+        #expect(layout.hitTest(CGPoint(x: 14, y: 7)) == TextPosition(line: 0, offset: 1))
+        #expect(layout.hitTest(CGPoint(x: 16, y: 7)) == TextPosition(line: 0, offset: 2))
+        #expect(layout.hitTest(CGPoint(x: 49, y: 27)) == TextPosition(line: 1, offset: 5))
+        #expect(layout.hitTest(CGPoint(x: 90, y: 7)) == nil)
+        #expect(layout.nearestPosition(to: CGPoint(x: 90, y: 7)) == TextPosition(line: 0, offset: 5))
+    }
+
+    @Test func selectsAcrossLinesInReadingOrder() {
+        // Given out of order; the layout sorts them top to bottom.
+        let layout = TextLayout([line("world", y: 20), line("hello", y: 0)])
+        let range = TextSpan(anchor: TextPosition(line: 1, offset: 2), focus: TextPosition(line: 0, offset: 3))
+        #expect(layout.text(for: range) == "lo\nwo")
+        #expect(layout.rects(for: range) == [CGRect(x: 30, y: 0, width: 20, height: 14), CGRect(x: 0, y: 20, width: 20, height: 14)])
+        #expect(layout.text(for: TextSpan(anchor: range.anchor, focus: range.anchor)) == "")
+    }
+
+    @Test func doubleClickSelectsAWord() {
+        let layout = TextLayout([line("copy the text", y: 0), line("直接选择文字", y: 20)])
+        let word = layout.word(at: CGPoint(x: 65, y: 7))!
+        #expect(layout.text(for: word) == "the")
+        let cjk = layout.word(at: CGPoint(x: 25, y: 27))!
+        #expect(!cjk.isEmpty && layout.text(for: cjk).count < 6)
+        let whole = layout.line(at: CGPoint(x: 25, y: 27))!
+        #expect(layout.text(for: whole) == "直接选择文字")
     }
 }

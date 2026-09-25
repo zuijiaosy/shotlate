@@ -55,6 +55,7 @@ enum FeatureChecks {
         ("ocr-structure", ocrStructure),
         ("pin-translate", pinTranslate),
         ("beautify", beautify),
+        ("pin-text", pinText),
     ]
 
     @MainActor
@@ -1396,5 +1397,60 @@ enum FeatureChecks {
         expect(h.view.exportImage(format: .png, shadow: false)?.size == CGSize(width: 500, height: 300), "pins stay without a backdrop")
         StyleMemory.backdrop = nil
         expect(h.view.exportImage(format: .png, shadow: false)?.size == CGSize(width: 500, height: 300), "backdrop off: plain export")
+    }
+
+    @MainActor static func pinText() async {
+        let h = CaptureHarness(lines: ["Settings", "Automatically check for updates", "直接在贴图上选择文字"])
+        h.select(CGRect(x: 60, y: 60, width: 420, height: 110))
+        guard let rep = h.export() else { return expect(false, "export") }
+        let pin = PinManager.shared.pin(rep, frame: CGRect(origin: CGPoint(x: -4000, y: -4000), size: rep.size))
+        let view = pin.testing_view
+        for _ in 0..<300 where view.textLayout == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        guard let layout = view.textLayout else { return expect(false, "a new pin recognizes its text") }
+        expect(layout.lines.count == 3, "three lines recognized (\(layout.lines.map(\.text)))")
+        guard let auto = layout.lines.firstIndex(where: { $0.text.contains("check") }), auto + 1 < layout.lines.count else { return }
+        let line = layout.lines[auto]
+        let start = line.text.distance(from: line.text.startIndex, to: line.text.range(of: "check")!.lowerBound)
+        // At 100% the view shows the image one to one.
+        func point(_ l: Int, _ k: Int) -> CGPoint { CGPoint(x: layout.lines[l].boxes[k].minX + 0.5, y: layout.lines[l].rect.midY) }
+        func mouse(_ type: NSEvent.EventType, _ p: CGPoint, clicks: Int = 1) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: view.convert(p, to: nil), modifierFlags: [], timestamp: 0,
+                               windowNumber: pin.windowNumber, context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+        }
+        let last = layout.lines[auto + 1]
+        let end = CGPoint(x: last.rect.maxX + 30, y: last.rect.midY)
+        view.mouseDown(with: mouse(.leftMouseDown, point(auto, start)))
+        view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 200, y: 60)))
+        view.mouseDragged(with: mouse(.leftMouseDragged, end))
+        view.mouseUp(with: mouse(.leftMouseUp, end))
+        let origin = pin.frame.origin
+        expect(pin.frame.origin == origin && view.textSelection != nil, "dragging on text selects instead of moving the pin")
+        NSPasteboard.general.clearContents()
+        key(pin, "c", code: 8, flags: .command)
+        let copied = NSPasteboard.general.string(forType: .string) ?? ""
+        expect(copied == "check for updates\n" + last.text, "⌘C copies the selected text across lines (\(copied.debugDescription))")
+        write(render(view) ?? rep, "pin-text-selection.png")
+
+        view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 400, y: 100)))
+        view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 400, y: 100)))
+        expect(view.textSelection == nil, "clicking off the text clears the selection")
+        view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 400, y: 100), clicks: 2))
+        expect(pin.isVisible, "double-clicking a pin no longer closes it")
+        let settings = layout.lines.firstIndex { $0.text == "Settings" } ?? 0
+        view.mouseDown(with: mouse(.leftMouseDown, point(settings, 2), clicks: 2))
+        expect(view.selectedText == layout.lines[settings].text, "double-click selects a word (\(view.selectedText ?? "nil"))")
+        view.mouseDown(with: mouse(.leftMouseDown, point(auto, 2), clicks: 3))
+        expect(view.selectedText == line.text, "triple-click selects the line")
+        key(pin, "\u{1b}", code: 53)
+        expect(view.textSelection == nil && pin.isVisible, "Esc first clears the selection")
+
+        key(pin, "1", code: 18)
+        expect(view.textLayout == nil, "rotating drops the old text layout")
+        key(pin, "2", code: 19)
+        for _ in 0..<300 where view.textLayout == nil { try? await Task.sleep(for: .milliseconds(100)) }
+        expect(view.textLayout?.lines.contains { $0.text.contains("check") } == true, "and recognizes the new picture again")
+        key(pin, "\u{1b}", code: 53)
+        expect(!pin.isVisible, "Esc then closes the pin")
+        PinManager.shared.closeAll()
     }
 }

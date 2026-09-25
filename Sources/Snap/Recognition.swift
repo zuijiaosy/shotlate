@@ -37,15 +37,38 @@ enum TextRecognizer {
         }
     }
 
+    private static func makeTextRequest() -> VNRecognizeTextRequest {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US", "ja-JP", "ko-KR"]
+        request.automaticallyDetectsLanguage = true
+        return request
+    }
+
+    /// Recognizes the text of `image` (the pixels of `bounds`) with a box per character, for selecting it on a pin.
+    static func layout(_ image: CGImage, bounds: CGRect) async throws -> TextLayout {
+        try await Task.detached(priority: .userInitiated) {
+            let request = makeTextRequest()
+            try VNImageRequestHandler(cgImage: image).perform([request])
+            let lines = (request.results ?? []).compactMap { observation -> GlyphLine? in
+                guard let candidate = observation.topCandidates(1).first, !candidate.string.isEmpty else { return nil }
+                let text = candidate.string
+                let boxes = text.indices.map { i -> CGRect? in
+                    guard let box = try? candidate.boundingBox(for: i..<text.index(after: i))?.boundingBox else { return nil }
+                    return VisionGeometry.rect(fromNormalized: box, in: bounds)
+                }
+                return GlyphLine(text: text, rect: VisionGeometry.rect(fromNormalized: observation.boundingBox, in: bounds), boxes: boxes)
+            }
+            return TextLayout(lines)
+        }.value
+    }
+
     /// Runs Vision text and barcode recognition on `image`, the pixels of `selection`.
     /// Returned line rects are in the same coordinate space as `selection`.
     static func recognize(_ image: CGImage, selection: CGRect) async throws -> RecognitionResult {
         try await Task.detached(priority: .userInitiated) {
-            let textRequest = VNRecognizeTextRequest()
-            textRequest.recognitionLevel = .accurate
-            textRequest.usesLanguageCorrection = true
-            textRequest.recognitionLanguages = ["zh-Hans", "zh-Hant", "en-US", "ja-JP", "ko-KR"]
-            textRequest.automaticallyDetectsLanguage = true
+            let textRequest = makeTextRequest()
             let barcodeRequest = VNDetectBarcodesRequest()
             try VNImageRequestHandler(cgImage: image).perform([textRequest, barcodeRequest])
 
