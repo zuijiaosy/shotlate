@@ -113,7 +113,7 @@ scripts/make-dmg.sh 0.1.0                   # 打包成 build/Snap-0.1.0.dmg
 
 - **Base URL**：默认 `https://api.deepseek.com`。任何 OpenAI 兼容服务都可以用。
 - **模型**：默认 `deepseek-flash`。
-- **API Key**：保存在钥匙串中。
+- **API Key**：保存在 `~/Library/Application Support/Snap/api-key`，文件权限只允许你的账户读写。不用钥匙串，重新安装或更新后也不会再弹密码框。
 - **译成**：简体中文（默认）、繁體中文、English、日本語、한국어。
 
 填好后可以点「测试连接」检查配置。
@@ -125,7 +125,7 @@ Sources/SnapCore/   纯逻辑，有单元测试：Vision 坐标换算、段落�
 Sources/Snap/       应用：截图覆盖层、标注、工具栏、文字识别、译文排版、导出、贴图、设置
 ```
 
-直接运行 `.build/debug/Snap`（未打包）时不读写钥匙串，翻译用的 Key 取自环境变量 `DEEPSEEK_API_KEY`，避免脚本运行时卡在钥匙串授权弹窗上。
+直接运行 `.build/debug/Snap`（未打包）时不读写保存的 Key，翻译用的 Key 取自环境变量 `DEEPSEEK_API_KEY`，脚本运行不会碰到真实配置。
 
 不打开截图界面也能检查文字识别和翻译排版：
 

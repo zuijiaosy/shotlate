@@ -25,7 +25,7 @@ final class SettingsModel: ObservableObject {
 
     static let languages = ["简体中文", "繁體中文", "English", "日本語", "한국어"]
 
-    /// `loadSecrets` false skips the Keychain, which would prompt when read from an unsigned build (the self-checks).
+    /// `loadSecrets` false leaves the API key out (the self-checks don't need it).
     init(loadSecrets: Bool = true) {
         if loadSecrets { apiKey = Settings.shared.apiKey }
     }
@@ -211,7 +211,7 @@ struct SettingsView: View {
             } header: {
                 Text("翻译")
             } footer: {
-                Text("使用 OpenAI 兼容接口，默认是 DeepSeek 的 deepseek-flash。API Key 保存在钥匙串中。发送给翻译服务的只有识别出的文字，截图本身不会上传。")
+                Text("使用 OpenAI 兼容接口，默认是 DeepSeek 的 deepseek-flash。API Key 保存在本机的 ~/Library/Application Support/Snap/api-key，只有你的账户能读取。发送给翻译服务的只有识别出的文字，截图本身不会上传。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -1,6 +1,5 @@
 import AppKit
 import Carbon.HIToolbox
-import Security
 import SnapCore
 
 /// A global keyboard shortcut in Carbon terms, plus the key label shown in the UI.
@@ -64,7 +63,7 @@ enum ImageFormat: String, CaseIterable, Identifiable {
     var fileExtension: String { self == .png ? "png" : "jpg" }
 }
 
-/// App settings. Everything lives in UserDefaults except the API key, which goes to the Keychain.
+/// App settings. Everything lives in UserDefaults except the API key, which has its own file (see `SecretFile`).
 final class Settings {
     static let shared = Settings()
     static let didChange = Notification.Name("SnapSettingsDidChange")
@@ -86,16 +85,17 @@ final class Settings {
         set { defaults.set(newValue, forKey: "translate.targetLanguage") }
     }
 
-    /// In the Keychain for the app. An unbundled dev build (`.build/debug/Snap`) reads DEEPSEEK_API_KEY instead:
-    /// its Keychain access would stop at a permission prompt, which hangs scripted runs.
+    /// In a file only the user can read, not the Keychain: a Keychain item asks for the login password again
+    /// whenever the app's signature changes, which is every rebuild. An unbundled dev build (`.build/debug/Snap`)
+    /// reads DEEPSEEK_API_KEY instead, so scripted runs never touch the real key.
     var apiKey: String {
         get {
             guard Bundle.main.bundleIdentifier != nil else { return ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"] ?? "" }
-            return Keychain.read(account: "deepseek-api-key") ?? ""
+            return SecretFile.read("api-key") ?? ""
         }
         set {
             guard Bundle.main.bundleIdentifier != nil else { return }
-            Keychain.write(newValue, account: "deepseek-api-key")
+            SecretFile.write(newValue, "api-key")
         }
     }
 
@@ -156,33 +156,29 @@ final class Settings {
     }
 }
 
-enum Keychain {
-    private static let service = "app.snap.Snap"
-
-    static func read(account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+/// Small secrets in `~/Library/Application Support/Snap`, readable and writable only by the user (0600).
+enum SecretFile {
+    static var directory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Snap", isDirectory: true)
     }
 
-    static func write(_ value: String, account: String) {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        SecItemDelete(query as CFDictionary)
-        guard !value.isEmpty else { return }
-        var attributes = query
-        attributes[kSecValueData as String] = Data(value.utf8)
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(attributes as CFDictionary, nil)
+    static func read(_ name: String) -> String? {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(name)) else { return nil }
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// An empty value removes the file.
+    static func write(_ value: String, _ name: String) {
+        let url = directory.appendingPathComponent(name)
+        let fm = FileManager.default
+        guard !value.isEmpty else {
+            try? fm.removeItem(at: url)
+            return
+        }
+        try? fm.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // Created with 0600 before any bytes are written, so the key is never readable by others.
+        fm.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try? Data(value.utf8).write(to: url)
     }
 }

@@ -295,7 +295,7 @@ final class PinWindow: NSPanel {
             return
         }
         guard !isTranslating else { return }
-        // Only the real translator needs the key; checking it reads the Keychain.
+        // Only the real translator needs the key.
         if translateUsesDefault, Settings.shared.apiKey.isEmpty {
             pinView.flash("请先在设置里填写翻译的 API Key")
             return

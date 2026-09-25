@@ -34,6 +34,7 @@ enum FeatureChecks {
         ("toolbar-placement", toolbarPlacement),
         ("toolbar-keys", toolbarKeys),
         ("ocr", ocr),
+        ("secret-file", secretFile),
     ]
 
     @MainActor
@@ -468,7 +469,7 @@ enum FeatureChecks {
         expect(center.registeredCount == 0, "a cleared shortcut is released")
         center.unregisterAll()
 
-        // The settings window, rendered offscreen for a look (without touching the Keychain).
+        // The settings window, rendered offscreen for a look (without reading the API key).
         let model = SettingsModel(loadSecrets: false)
         let hosting = NSHostingView(rootView: SettingsView(model: model))
         hosting.frame = CGRect(x: 0, y: 0, width: 480, height: 900)
@@ -559,6 +560,19 @@ enum FeatureChecks {
         key(pin, "y", code: 16)
         expect(pin.showsTranslation, "and back to the translation without translating again")
         PinManager.shared.closeAll()
+    }
+
+    @MainActor static func secretFile() async {
+        let name = "check-secret"
+        defer { SecretFile.write("", name) }
+        SecretFile.write("sk-first", name)
+        SecretFile.write("sk-second", name)
+        expect(SecretFile.read(name) == "sk-second", "the saved key reads back")
+        let path = SecretFile.directory.appendingPathComponent(name).path
+        let mode = (try? FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int) ?? 0
+        expect(mode == 0o600, "only the user can read it (mode \(String(mode, radix: 8)))")
+        SecretFile.write("", name)
+        expect(SecretFile.read(name) == nil, "an empty key removes the file")
     }
 
     @MainActor static func ocr() async {

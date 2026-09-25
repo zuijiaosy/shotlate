@@ -5,7 +5,7 @@ import SnapCore
 ///
 ///   Snap --translate-image input.png output.png [--scale 2]
 ///
-/// Uses the API key from DEEPSEEK_API_KEY or the Keychain. Without a key it substitutes
+/// Uses the API key from DEEPSEEK_API_KEY. Without a key it substitutes
 /// placeholder translations so layout and rendering can still be checked.
 enum DevTools {
     static func runIfRequested() {
