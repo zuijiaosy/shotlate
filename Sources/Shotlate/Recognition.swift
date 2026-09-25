@@ -12,19 +12,35 @@ struct RecognitionResult {
 }
 
 enum TextRecognizer {
-    /// Loads the recognition model in the background at launch. The first request in a process can
-    /// take many seconds while the model is compiled; paying that before the user translates hides it.
+    /// Loads the recognition models in the background at launch. The first recognition by a new build compiles
+    /// them, which took about 30 s here; afterwards it takes a tenth of a second, also in later launches.
+    /// It has to be real text: a blank image, or a single mixed Chinese and English line, compiled only part of
+    /// them and the first real page still took 14 s. One English line followed by one Chinese line covers it.
+    /// Call on the main thread (the sample lines are drawn with AppKit); recognition runs in the background.
     static func warmUp() {
+        let samples = ["The quick brown fox jumps over the lazy dog", "截图里的文字会在本机识别"].compactMap(sampleLine)
         Task.detached(priority: .utility) {
-            let size = 64
-            guard let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
-                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-            ctx.setFillColor(CGColor(gray: 1, alpha: 1))
-            ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
-            guard let image = ctx.makeImage() else { return }
-            _ = try? await recognize(image, selection: CGRect(x: 0, y: 0, width: size, height: size))
+            for image in samples {
+                _ = try? await recognize(image, selection: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            }
         }
+    }
+
+    /// One line of black text on white, at 2x.
+    private static func sampleLine(_ text: String) -> CGImage? {
+        let size = CGSize(width: 480, height: 48)
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = size
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor.white.setFill()
+        CGRect(origin: .zero, size: size).fill()
+        NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 20), .foregroundColor: NSColor.black])
+            .draw(at: CGPoint(x: 12, y: 12))
+        return rep.cgImage
     }
 
     private static func makeTextRequest() -> VNRecognizeTextRequest {
