@@ -110,6 +110,26 @@ scripts/test.sh           # 运行单元测试
 - 框选时避开滚动条效果更好；滚得太快、两帧之间没有重叠时，面板会提示放慢速度。
 - 长度上限是 60,000 像素。
 
+## 自动化
+
+其他程序、脚本、快捷指令、Raycast / Alfred 可以用 `snap://` 链接控制 Snap：
+
+| 链接 | 作用 |
+| --- | --- |
+| `snap://capture` | 开始截图；加 `output=clipboard,pin,save` 后，选好区域立即输出，不再停留 |
+| `snap://capture?area=full` | 静默截取光标所在屏幕（默认复制）；`area` 也可以是 `last`（上次选区）、`window`（当前窗口）或 `x,y,宽,高`（以主屏左上角为原点的点坐标） |
+| `snap://capture?area=window&file=~/Desktop/w.png&delay=2` | 2 秒后截取当前窗口并保存到指定文件 |
+| `snap://pin` · `snap://toggle-pins` · `snap://whiteboard?transparent=1` · `snap://scan` · `snap://history` | 剪贴板贴图 · 隐藏/显示贴图 · 透明白板 · 扫码 · 回放上一次截图 |
+
+命令行兼容 Snipaste 的常用写法，会转发给正在运行的 Snap（加 `--dry-run` 只打印对应的链接）：
+
+```bash
+/Applications/Snap.app/Contents/MacOS/Snap snip --full -o clipboard
+/Applications/Snap.app/Contents/MacOS/Snap snip --area 0 0 800 600 -o "pin;quick-save;~/Desktop/a.png"
+/Applications/Snap.app/Contents/MacOS/Snap snip --last --delay 1.5
+/Applications/Snap.app/Contents/MacOS/Snap paste | toggle-images | whiteboard [--transparent] | barcode-scan
+```
+
 ## 设置
 
 菜单栏 Snap → 设置 里可以修改截图和贴图的快捷键、保存位置和格式，开关截图音效，以及设置登录时启动。

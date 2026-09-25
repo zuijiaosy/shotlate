@@ -63,8 +63,11 @@ final class CaptureSession {
     var liveCapture: () async throws -> [CGDirectDisplayID: CGImage] = CaptureSession.captureByDisplay
     private(set) var isFinished = false
 
+    /// Outputs to perform as soon as a selection is made (`snap://capture?output=…`, `snip -o …`).
+    var autoOutputs: [CaptureRequest.Output] = []
+
     /// `replay` opens straight into the most recent capture from history.
-    static func begin(replay: Bool = false) {
+    static func begin(replay: Bool = false, autoOutputs: [CaptureRequest.Output] = []) {
         guard current == nil, !isStarting else { return }
         guard CaptureEngine.hasPermission else {
             requestPermission()
@@ -85,6 +88,7 @@ final class CaptureSession {
                 let snapshots = try await CaptureEngine.captureScreens()
                 guard !snapshots.isEmpty else { return }
                 let session = CaptureSession(snapshots: snapshots, windowFrames: windowFrames, pointer: pointer, previousApp: previousApp)
+                session.autoOutputs = autoOutputs
                 current = session
                 session.show()
                 if replay, let view = session.activeView { session.stepHistory(1, from: view) }
@@ -395,6 +399,21 @@ final class CaptureSession {
         } else {
             view.primeCursor()
         }
+    }
+
+    /// Runs the requested outputs for `view`'s fresh selection and closes the capture.
+    func performAutoOutputs(from view: CaptureView) {
+        guard !autoOutputs.isEmpty, let rep = view.exportImage(format: .png), let frame = view.selectionOnScreen,
+              let pinRep = view.exportImage(format: .png, shadow: false) else { return }
+        let outputs = autoOutputs
+        autoOutputs = []
+        record(view)
+        finish()
+        // Pins never carry the drop shadow; copies and files follow the shadow setting like a normal capture.
+        let results = AutomationRunner.deliver(pinRep, frame: frame, outputs: outputs.filter { $0 == .pin })
+            + AutomationRunner.deliver(rep, frame: frame, outputs: outputs.filter { $0 != .pin })
+        Sound.playCapture()
+        HUD.show(results.joined(separator: "，"))
     }
 
     func canInteract(_ view: CaptureView) -> Bool {

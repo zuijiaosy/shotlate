@@ -10,6 +10,19 @@ import SnapCore
 enum DevTools {
     static func runIfRequested() {
         let args = CommandLine.arguments
+        // Snipaste-style commands are forwarded to the running app as a snap:// URL.
+        var forwarded = Array(args.dropFirst())
+        let dryRun = forwarded.first == "--dry-run"
+        if dryRun { forwarded.removeFirst() }
+        if let command = Automation.parse(arguments: forwarded) {
+            let url = Automation.url(for: command)
+            print(url.absoluteString)
+            if !dryRun, !NSWorkspace.shared.open(url) {
+                FileHandle.standardError.write(Data("error: 无法打开 \(url.absoluteString)，请确认 Snap.app 已安装\n".utf8))
+                exit(1)
+            }
+            exit(0)
+        }
         if args.count >= 4, args[1] == "--ui-demo" {
             // Run inside the real event loop so async work (Vision, network) resumes on the main thread as in the app.
             let app = NSApplication.shared

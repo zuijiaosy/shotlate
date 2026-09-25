@@ -39,6 +39,7 @@ enum FeatureChecks {
         ("boards", boards),
         ("elements", elements),
         ("pin-annotate", pinAnnotate),
+        ("automation", automation),
     ]
 
     @MainActor
@@ -990,6 +991,49 @@ enum FeatureChecks {
         v2.keyDown(with: NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
                                           characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!)
         expect(second.isFinished && pin.id == before && pin.isVisible, "Esc leaves the pin unchanged")
+        PinManager.shared.closeAll()
+    }
+
+    @MainActor static func automation() async {
+        // Two side-by-side 2x screens: red on the left, blue on the right.
+        let left = CGRect(x: 0, y: 0, width: 400, height: 300), right = CGRect(x: 400, y: 0, width: 400, height: 300)
+        let screens = [(left, sampleRep(left.size, color: .systemRed).cgImage!), (right, sampleRep(right.size, color: .systemBlue).cgImage!)]
+        let rep = AutomationRunner.crop(CGRect(x: 450, y: 100, width: 120, height: 80), screens: screens)
+        expect(rep?.size == CGSize(width: 120, height: 80) && rep?.pixelsWide == 240, "crops the area from the right screen at full resolution")
+        if let c = rep?.color(atPoint: CGPoint(x: 60, y: 40)) { expect(c.blueComponent > 0.8 && c.redComponent < 0.4, "with that screen's pixels") }
+        expect(AutomationRunner.crop(CGRect(x: 350, y: 100, width: 100, height: 50), screens: screens)?.size == CGSize(width: 50, height: 50),
+               "an area across two screens is cut to the screen holding its center")
+
+        let dir = outputDirectory.appendingPathComponent("automation", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        let file = dir.appendingPathComponent("sub/out.png")
+        let saved = Settings.shared.saveDirectory
+        defer { Settings.shared.saveDirectory = saved }
+        Settings.shared.saveDirectory = dir
+        let before = PinManager.shared.pins.count
+        let results = AutomationRunner.deliver(rep!, frame: CGRect(x: -4000, y: -4000, width: 120, height: 80), outputs: [.pin, .quickSave, .file(file.path)])
+        expect(results.count == 3 && FileManager.default.fileExists(atPath: file.path), "writes the requested file, creating folders (\(results))")
+        expect(PinManager.shared.pins.count == before + 1 && PinManager.shared.pins.last?.frame.origin == CGPoint(x: -4000, y: -4000), "pins where the area was")
+        let quick = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasSuffix(".png") }
+        expect(quick.count == 1, "quick-save goes to the save folder")
+        PinManager.shared.closeAll()
+
+        // Interactive capture with an output: selecting is enough.
+        let h = CaptureHarness()
+        let session = CaptureSession.makeForTesting(image: h.snapshot, size: h.size,
+                                                    history: CaptureHistory(directory: outputDirectory.appendingPathComponent("auto-history")))
+        session.autoOutputs = [.pin]
+        let view = session.testing_views[0]
+        func mouse(_ type: NSEvent.EventType, _ p: CGPoint) -> NSEvent {
+            NSEvent.mouseEvent(with: type, location: view.convert(p, to: nil), modifierFlags: [], timestamp: 0,
+                               windowNumber: view.window!.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        }
+        view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 100, y: 100)))
+        view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 260, y: 200)))
+        view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 260, y: 200)))
+        for _ in 0..<50 where !session.isFinished { try? await Task.sleep(for: .milliseconds(20)) }
+        expect(session.isFinished && PinManager.shared.pins.last?.frame.size == CGSize(width: 160, height: 100),
+               "snip -o pin pins the selection as soon as it is made")
         PinManager.shared.closeAll()
     }
 }

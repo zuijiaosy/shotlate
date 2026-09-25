@@ -24,6 +24,17 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>app.snap.Snap</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>snap</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Snap 需要屏幕录制权限来截取屏幕内容。</string>
 </dict>

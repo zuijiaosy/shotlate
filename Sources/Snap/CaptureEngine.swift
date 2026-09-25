@@ -46,7 +46,7 @@ enum CaptureEngine {
     }
 
     /// Frames of normal app windows, front to back, in Cocoa global coordinates (origin bottom-left of the main screen).
-    static func windowFrames() -> [CGRect] {
+    static func windowFrames(ownedBy owner: pid_t? = nil) -> [CGRect] {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
               let primaryHeight = NSScreen.screens.first?.frame.height
         else { return [] }
@@ -54,6 +54,7 @@ enum CaptureEngine {
         return list.compactMap { info in
             guard (info[kCGWindowLayer as String] as? Int) == 0,
                   (info[kCGWindowOwnerPID as String] as? Int) != ownPID,
+                  owner == nil || (info[kCGWindowOwnerPID as String] as? Int) == Int(owner!),
                   (info[kCGWindowAlpha as String] as? Double ?? 1) > 0,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict),

@@ -1,4 +1,5 @@
 import AppKit
+import SnapCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
@@ -74,6 +75,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if !CaptureEngine.hasPermission {
             CGRequestScreenCaptureAccess()
+        }
+    }
+
+    /// `snap://` URLs from other apps, scripts and the command line.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            if let command = Automation.parse(url) {
+                AutomationRunner.run(command)
+            } else {
+                HUD.show("无法识别的链接：\(url.absoluteString)")
+            }
         }
     }
 

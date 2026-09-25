@@ -458,3 +458,58 @@ import Testing
         #expect(ElementHierarchy(nodes: cyclic).chain(at: CGPoint(x: 5, y: 5), within: nil).count == 2)
     }
 }
+
+@Suite struct AutomationTests {
+    @Test func parsesCaptureURLs() {
+        #expect(Automation.parse(URL(string: "snap://capture")!) == .capture(CaptureRequest(area: .interactive, outputs: [])))
+        #expect(Automation.parse(URL(string: "snap://capture?area=full&output=clipboard,pin&delay=2")!)
+            == .capture(CaptureRequest(area: .fullScreen, outputs: [.clipboard, .pin], delay: 2)))
+        #expect(Automation.parse(URL(string: "snap://capture?area=10,20,300,200&file=/tmp/a%20b.png")!)
+            == .capture(CaptureRequest(area: .rect(CGRect(x: 10, y: 20, width: 300, height: 200)), outputs: [.file("/tmp/a b.png")])))
+        #expect(Automation.parse(URL(string: "snap://capture?area=window&output=save")!)
+            == .capture(CaptureRequest(area: .activeWindow, outputs: [.quickSave])))
+        #expect(Automation.parse(URL(string: "snap://capture?area=1,2,3")!) == nil)
+        #expect(Automation.parse(URL(string: "snap://capture?output=fax")!) == nil)
+        #expect(Automation.parse(URL(string: "http://capture")!) == nil)
+    }
+
+    @Test func parsesOtherURLs() {
+        #expect(Automation.parse(URL(string: "snap://pin")!) == .pinClipboard)
+        #expect(Automation.parse(URL(string: "snap://toggle-pins")!) == .togglePins)
+        #expect(Automation.parse(URL(string: "snap://whiteboard?transparent=1")!) == .whiteboard(transparent: true))
+        #expect(Automation.parse(URL(string: "snap://whiteboard")!) == .whiteboard(transparent: false))
+        #expect(Automation.parse(URL(string: "snap://scan")!) == .scanCode)
+        #expect(Automation.parse(URL(string: "snap://nope")!) == nil)
+    }
+
+    @Test func parsesSnipasteStyleArguments() {
+        #expect(Automation.parse(arguments: ["snip", "--full", "-o", "clipboard"])
+            == .capture(CaptureRequest(area: .fullScreen, outputs: [.clipboard])))
+        #expect(Automation.parse(arguments: ["snip", "--area", "0", "0", "800", "600", "-o", "pin;quick-save;/tmp/x.png"])
+            == .capture(CaptureRequest(area: .rect(CGRect(x: 0, y: 0, width: 800, height: 600)), outputs: [.pin, .quickSave, .file("/tmp/x.png")])))
+        #expect(Automation.parse(arguments: ["snip", "--last", "--delay", "1.5"])
+            == .capture(CaptureRequest(area: .last, outputs: [], delay: 1.5)))
+        #expect(Automation.parse(arguments: ["snip", "--area", "0", "0"]) == nil)
+        #expect(Automation.parse(arguments: ["snip", "--bogus"]) == nil)
+        #expect(Automation.parse(arguments: ["paste"]) == .pinClipboard)
+        #expect(Automation.parse(arguments: ["whiteboard", "--transparent"]) == .whiteboard(transparent: true))
+        #expect(Automation.parse(arguments: ["--ui-demo"]) == nil)
+    }
+
+    @Test func roundTripsThroughURLs() {
+        let commands: [AutomationCommand] = [
+            .capture(CaptureRequest(area: .rect(CGRect(x: 1.5, y: 2, width: 30, height: 40)), outputs: [.clipboard, .file("/tmp/a b.png")], delay: 3)),
+            .capture(CaptureRequest(area: .last, outputs: [.pin])),
+            .capture(CaptureRequest(area: .interactive, outputs: [])),
+            .whiteboard(transparent: true), .togglePins, .scanCode, .pinClipboard, .replayHistory,
+        ]
+        for command in commands {
+            #expect(Automation.parse(Automation.url(for: command)) == command)
+        }
+    }
+
+    @Test func fixedAreasDefaultToClipboard() {
+        #expect(CaptureRequest(area: .fullScreen, outputs: []).effectiveOutputs == [.clipboard])
+        #expect(CaptureRequest(area: .interactive, outputs: []).effectiveOutputs.isEmpty)
+    }
+}

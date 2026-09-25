@@ -954,6 +954,13 @@ final class CaptureView: NSView {
     }
 
     private func commitSelection() {
+        if mode == .screenshot, let session, !session.autoOutputs.isEmpty {
+            hasSelection = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let session = self.session, !session.isFinished else { return }
+                session.performAutoOutputs(from: self)
+            }
+        }
         hasSelection = true
         hoverRect = nil
         magnifier.isHidden = true
@@ -1793,7 +1800,7 @@ final class CaptureView: NSView {
     }
 
     /// The selection in global screen coordinates.
-    private var selectionOnScreen: CGRect? {
+    var selectionOnScreen: CGRect? {
         guard let window else { return nil }
         return CGRect(x: window.frame.minX + selection.minX, y: window.frame.maxY - selection.maxY,
                       width: selection.width, height: selection.height)
