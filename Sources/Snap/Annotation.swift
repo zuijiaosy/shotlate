@@ -1,7 +1,7 @@
 import AppKit
 
 enum Tool: String, CaseIterable {
-    case rectangle, ellipse, line, arrow, pen, highlighter, mosaic, eraser, text, number
+    case rectangle, ellipse, line, arrow, pen, highlighter, mosaic, eraser, magnifier, text, number
 
     var title: String {
         switch self {
@@ -13,6 +13,7 @@ enum Tool: String, CaseIterable {
         case .highlighter: return "记号笔"
         case .mosaic: return "马赛克"
         case .eraser: return "橡皮擦"
+        case .magnifier: return "放大镜"
         case .text: return "文字"
         case .number: return "序号"
         }
@@ -28,6 +29,7 @@ enum Tool: String, CaseIterable {
         case .highlighter: return "highlighter"
         case .mosaic: return "checkerboard.rectangle"
         case .eraser: return "eraser"
+        case .magnifier: return "plus.magnifyingglass"
         case .text: return "textformat"
         case .number: return "1.circle"
         }
@@ -44,6 +46,7 @@ enum Tool: String, CaseIterable {
         case .highlighter: return "h"
         case .mosaic: return "m"
         case .eraser: return "e"
+        case .magnifier: return "g"
         case .text: return "t"
         case .number: return "n"
         }
@@ -54,6 +57,7 @@ enum Tool: String, CaseIterable {
         switch self {
         case .mosaic, .eraser: return 6...120
         case .highlighter: return 6...60
+        case .magnifier: return 1...10
         case .text: return 10...120
         case .number: return 14...80
         default: return 1...40
@@ -64,6 +68,7 @@ enum Tool: String, CaseIterable {
         switch self {
         case .mosaic, .eraser: return [12, 24, 48]
         case .highlighter: return [12, 20, 32]
+        case .magnifier: return [2, 3, 5]
         case .text: return [14, 20, 32]
         case .number: return [20, 26, 36]
         default: return [2, 4, 8]
@@ -118,6 +123,8 @@ enum Shape: Equatable, Codable {
     /// Text origin is the top-left of the first line; lines wrap at `width`.
     case text(String, CGPoint, width: CGFloat)
     case number(CGPoint)
+    /// A circle of radius `radius` around `source`, shown enlarged in a lens centered at `target`.
+    case magnifier(source: CGPoint, target: CGPoint, radius: CGFloat)
 }
 
 struct AnnotationItem: Equatable {
@@ -140,6 +147,7 @@ struct AnnotationItem: Equatable {
         case .mosaicRect, .mosaicBrush: return effect == .original ? .eraser : .mosaic
         case .text: return .text
         case .number: return .number
+        case .magnifier: return .magnifier
         }
     }
 }
@@ -244,6 +252,11 @@ extension AnnotationItem {
             return style.text == .background ? r.insetBy(dx: -Self.textPadding(size), dy: -Self.textPadding(size) / 2) : r
         case let .number(center):
             return CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
+        case let .magnifier(source, target, radius):
+            let lens = radius * Self.magnification
+            return CGRect(x: source.x - radius, y: source.y - radius, width: radius * 2, height: radius * 2)
+                .union(CGRect(x: target.x - lens, y: target.y - lens, width: lens * 2, height: lens * 2))
+                .insetBy(dx: -pad, dy: -pad)
         }
     }
 
@@ -276,6 +289,9 @@ extension AnnotationItem {
             return bounds.insetBy(dx: -4, dy: -4).contains(p)
         case let .number(c):
             return hypot(p.x - c.x, p.y - c.y) <= size / 2 + 3
+        case let .magnifier(source, target, radius):
+            return hypot(p.x - target.x, p.y - target.y) <= radius * Self.magnification + tolerance
+                || abs(hypot(p.x - source.x, p.y - source.y) - radius) <= tolerance
         }
     }
 
@@ -287,6 +303,8 @@ extension AnnotationItem {
             return [(.start, a), (.end, b)]
         case let .polyline(points, _):
             return points.enumerated().map { (.vertex($0.offset), $0.element) }
+        case let .magnifier(source, target, _):
+            return [(.start, source), (.end, target)]
         default:
             return []
         }
@@ -307,6 +325,7 @@ extension AnnotationItem {
         case let .mosaicBrush(points): copy.shape = .mosaicBrush(points.map(m))
         case let .text(text, origin, width): copy.shape = .text(text, m(origin), width: width)
         case let .number(c): copy.shape = .number(m(c))
+        case let .magnifier(source, target, radius): copy.shape = .magnifier(source: m(source), target: m(target), radius: radius)
         }
         return copy
     }
@@ -321,6 +340,10 @@ extension AnnotationItem {
         case let (.line(a, b), .end): copy.shape = .line(a, CGPoint(x: b.x + d.x, y: b.y + d.y))
         case let (.arrow(a, b), .start): copy.shape = .arrow(CGPoint(x: a.x + d.x, y: a.y + d.y), b)
         case let (.arrow(a, b), .end): copy.shape = .arrow(a, CGPoint(x: b.x + d.x, y: b.y + d.y))
+        case let (.magnifier(source, target, radius), .start):
+            copy.shape = .magnifier(source: CGPoint(x: source.x + d.x, y: source.y + d.y), target: target, radius: radius)
+        case let (.magnifier(source, target, radius), .end):
+            copy.shape = .magnifier(source: source, target: CGPoint(x: target.x + d.x, y: target.y + d.y), radius: radius)
         case (.polyline(var points, let arrow), let .vertex(i)) where points.indices.contains(i):
             points[i] = CGPoint(x: points[i].x + d.x, y: points[i].y + d.y)
             copy.shape = .polyline(points, arrow: arrow)
@@ -338,7 +361,19 @@ extension AnnotationItem {
         case let .mosaicBrush(points): return !points.isEmpty
         case let .text(text, _, _): return !text.isEmpty
         case .number: return true
+        case let .magnifier(_, _, radius): return radius >= 4
         }
+    }
+
+    static let magnification: CGFloat = 2
+
+    /// Where the lens goes for a new magnifier: beside the circle, inside `bounds` if possible.
+    static func lensCenter(source: CGPoint, radius: CGFloat, in bounds: CGRect) -> CGPoint {
+        let lens = radius * magnification, gap = radius * 0.6
+        var x = source.x + radius + gap + lens
+        if x + lens > bounds.maxX { x = source.x - radius - gap - lens }
+        let y = min(max(source.y, bounds.minY + lens), bounds.maxY - lens)
+        return CGPoint(x: x, y: y)
     }
 
     static func textPadding(_ size: CGFloat) -> CGFloat { max(4, size * 0.35) }
@@ -533,6 +568,28 @@ struct ContentRenderer {
             }
             NSAttributedString(string: text, attributes: attributes)
                 .draw(with: CGRect(x: origin.x, y: origin.y, width: width, height: 100_000), options: [.usesLineFragmentOrigin])
+        case let .magnifier(source, target, radius):
+            let lens = radius * AnnotationItem.magnification
+            let dx = target.x - source.x, dy = target.y - source.y, distance = max(hypot(dx, dy), 0.001)
+            // Connector between the two circles' edges.
+            if distance > radius + lens {
+                cg.strokeLineSegments(between: [CGPoint(x: source.x + dx / distance * radius, y: source.y + dy / distance * radius),
+                                                CGPoint(x: target.x - dx / distance * lens, y: target.y - dy / distance * lens)])
+            }
+            cg.strokeEllipse(in: CGRect(x: source.x - radius, y: source.y - radius, width: radius * 2, height: radius * 2))
+            let lensRect = CGRect(x: target.x - lens, y: target.y - lens, width: lens * 2, height: lens * 2)
+            cg.saveGState()
+            cg.addEllipse(in: lensRect)
+            cg.clip()
+            // Map the lens back onto the source circle, enlarged.
+            cg.translateBy(x: target.x, y: target.y)
+            cg.scaleBy(x: AnnotationItem.magnification, y: AnnotationItem.magnification)
+            cg.translateBy(x: -source.x, y: -source.y)
+            cg.interpolationQuality = .none
+            drawBase()
+            cg.restoreGState()
+            cg.setShadow(offset: CGSize(width: 0, height: -2), blur: 6, color: NSColor.black.withAlphaComponent(0.35).cgColor)
+            cg.strokeEllipse(in: lensRect)
         case let .number(c):
             let d = item.size
             let circle = CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)

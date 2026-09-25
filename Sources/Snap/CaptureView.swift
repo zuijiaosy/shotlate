@@ -1024,6 +1024,9 @@ final class CaptureView: NSView {
         case .highlighter:
             draft = AnnotationItem(shape: .highlighter([p]), color: color, size: size)
             drag = .drawing(p)
+        case .magnifier:
+            draft = AnnotationItem(shape: .magnifier(source: p, target: p, radius: 0), color: color, size: size)
+            drag = .drawing(p)
         case .mosaic, .eraser:
             let effect = StyleMemory.areaEffect(for: tool)
             if StyleMemory.areaMode(for: tool) == .brush {
@@ -1091,6 +1094,9 @@ final class CaptureView: NSView {
                 end = CGPoint(x: start.x + cos(angle) * length, y: start.y + sin(angle) * length)
             }
             if case .line = item.shape { item.shape = .line(start, end) } else { item.shape = .arrow(start, end) }
+        case .magnifier:
+            let radius = hypot(p.x - start.x, p.y - start.y)
+            item.shape = .magnifier(source: start, target: AnnotationItem.lensCenter(source: start, radius: radius, in: selection), radius: radius)
         case .text, .number, .polyline:
             break
         }

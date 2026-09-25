@@ -44,6 +44,7 @@ enum FeatureChecks {
         ("pin-annotate", pinAnnotate),
         ("automation", automation),
         ("hotkeys", hotkeys),
+        ("magnifier", magnifierTool),
     ]
 
     @MainActor
@@ -1083,5 +1084,38 @@ enum FeatureChecks {
             write(rep, "settings.png")
         }
 
+    }
+
+    @MainActor static func magnifierTool() async {
+        StyleMemory.setColor(StyleState.palette[0], for: .magnifier)
+        let h = CaptureHarness()
+        h.select(CGRect(x: 40, y: 40, width: 700, height: 400))
+        h.key("g", code: 5)
+        let source = CGPoint(x: 110, y: 88)
+        h.drag(source, CGPoint(x: 134, y: 88))
+        guard case let .magnifier(s0, target, radius)? = h.view.testing_items.last?.shape else { return expect(false, "draws a magnifier") }
+        expect(s0 == source && abs(radius - 24) < 0.5 && target.x > source.x + radius, "circle where dragged, lens beside it (\(target))")
+        guard let rep = h.export() else { return expect(false, "export") }
+        write(rep, "magnifier.png")
+        // Every probe near the source (skipping the ring) must look the same inside the lens, at twice the offset.
+        var matches = 0, total = 0
+        for dx in stride(from: -14, through: 14, by: 2) {
+            for dy in stride(from: -8, through: 8, by: 2) {
+                let q = CGPoint(x: source.x + CGFloat(dx), y: source.y + CGFloat(dy))
+                guard let original = h.original(q) else { continue }
+                let lensPoint = CGPoint(x: target.x + CGFloat(dx) * 2 - 40, y: target.y + CGFloat(dy) * 2 - 40)
+                guard let shown = rep.color(atPoint: lensPoint) else { continue }
+                total += 1
+                if abs(original.brightnessComponent - shown.brightnessComponent) < 0.2 { matches += 1 }
+            }
+        }
+        // Anti-aliased glyph edges don't land on exactly doubled points, so allow some disagreement there.
+        expect(total > 100 && Double(matches) / Double(total) > 0.8, "the lens shows the source area at 2× (\(matches)/\(total))")
+        // Drag the lens elsewhere by its handle.
+        h.drag(target, CGPoint(x: target.x + 60, y: target.y + 150))
+        if case let .magnifier(_, moved, _)? = h.view.testing_items.last?.shape {
+            expect(abs(moved.y - target.y - 150) < 0.5, "the lens can be moved on its own")
+        }
+        h.screenshot().map { write($0, "magnifier-overlay.png") }
     }
 }
