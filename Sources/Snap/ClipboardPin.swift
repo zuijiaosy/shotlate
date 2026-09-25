@@ -125,6 +125,8 @@ enum ClipboardPinSource {
 
     /// Renders `body` in a flipped, top-left-origin context of `size` points at `scale`.
     static func draw(size: CGSize, scale: CGFloat, _ body: () -> Void) -> NSBitmapImageRep? {
+        // Whole points, so the pin window's size is exact and survives saving and restoring.
+        let size = CGSize(width: ceil(size.width), height: ceil(size.height))
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int((size.width * scale).rounded()),
                                          pixelsHigh: Int((size.height * scale).rounded()), bitsPerSample: 8, samplesPerPixel: 4,
                                          hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),

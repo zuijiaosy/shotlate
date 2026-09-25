@@ -144,6 +144,12 @@ final class Settings {
         defaults.set(shortcut.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: key)
     }
 
+    /// Keep open pins when Snap quits and show them again at the next launch.
+    var restorePins: Bool {
+        get { defaults.object(forKey: "pin.restore") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "pin.restore") }
+    }
+
     /// How many past captures to keep for replay (`,` / `.` in the capture overlay). 0 turns history off.
     var historyLimit: Int {
         get { defaults.object(forKey: "history.limit") as? Int ?? 20 }

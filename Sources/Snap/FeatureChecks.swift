@@ -26,11 +26,13 @@ enum FeatureChecks {
         ("history", history),
         ("pin-thumbnail", pinThumbnail),
         ("pin-groups", pinGroups),
+        ("pin-restore", pinRestore),
     ]
 
     @MainActor
     static func run(_ name: String, output: URL?) async -> Int32 {
         setvbuf(stdout, nil, _IOLBF, 0)
+        PinStore.shared = PinStore(directory: outputDirectory.appendingPathComponent("pin-store", isDirectory: true))
         if let output { outputDirectory = output }
         try? FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
         let selected = name == "all" ? checks : checks.filter { $0.0 == name }
@@ -531,5 +533,54 @@ enum FeatureChecks {
         m.deleteGroup("项目 B 2")
         expect(m.groups.count == 1, "the last group can't be deleted")
         m.closeAll()
+    }
+
+    @MainActor static func pinRestore() async {
+        let m = PinManager.shared
+        m.closeAll()
+        let store = PinStore(directory: outputDirectory.appendingPathComponent("pin-restore", isDirectory: true))
+        store.clear()
+        let savedGroups = UserDefaults.standard.stringArray(forKey: "pin.groups")
+        defer { UserDefaults.standard.set(savedGroups, forKey: "pin.groups") }
+        UserDefaults.standard.removeObject(forKey: "pin.groups")
+        m.switchGroup(to: PinManager.defaultGroup)
+
+        let a = m.pin(splitRep(CGSize(width: 200, height: 100)), frame: CGRect(x: -4000, y: -4000, width: 200, height: 100))
+        a.setZoom(1.5, anchor: CGPoint(x: -4000, y: -4000))
+        a.setOpacity(0.6)
+        a.toggleFloating()
+        let text = ClipboardPinSource.textPin("备忘：周五交周报", scale: 2)!
+        let b = m.pin(text, centeredAt: CGPoint(x: -3500, y: -3900), on: nil)
+        let group = m.createGroup("资料")
+        let c = m.pin(sampleRep(), frame: CGRect(x: -3000, y: -4000, width: 120, height: 80))
+        c.enterFixedThumbnail(around: CGPoint(x: 10, y: 10))
+        let before = [a, b, c].map { ($0.persistentFrame, $0.zoom, $0.group, $0.sourceText) }
+        store.save(m)
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: store.directory.path)) ?? []
+        expect(files.filter { $0.hasSuffix(".png") }.count == 3 && files.contains("pins.json"), "saves one image per pin plus the state")
+
+        for pin in m.pins { pin.close(keepInHistory: false) }
+        m.switchGroup(to: PinManager.defaultGroup)
+        store.restore(into: m)
+        expect(m.pins.count == 3, "restores all three pins")
+        expect(m.currentGroup == group, "restores the current group")
+        for (pin, old) in zip(m.pins, before) {
+            let f = pin.frame, o = old.0
+            expect(abs(f.minX - o.minX) < 0.5 && abs(f.minY - o.minY) < 0.5 && abs(f.width - o.width) < 0.5 && abs(f.height - o.height) < 0.5,
+                   "frame restored (\(f) vs \(o))")
+            expect(abs(pin.zoom - old.1) < 0.001 && pin.group == old.2 && pin.sourceText == old.3, "zoom, group and text restored")
+        }
+        let ra = m.pins[0]
+        expect(abs(ra.alphaValue - 0.6) < 0.01 && ra.level == .normal, "opacity and the always-on-top switch are restored")
+        expect(ra.rep.size == CGSize(width: 200, height: 100), "image keeps its point size")
+        expect(!ra.isVisible && m.pins[2].isVisible, "only the current group is shown after restoring")
+
+        // Closing a pin and saving again removes its image.
+        m.pins[2].close(keepInHistory: false)
+        store.save(m)
+        let left = ((try? FileManager.default.contentsOfDirectory(atPath: store.directory.path)) ?? []).filter { $0.hasSuffix(".png") }
+        expect(left.count == 2, "closed pins' images are deleted")
+        m.closeAll()
+        m.deleteGroup(group)
     }
 }

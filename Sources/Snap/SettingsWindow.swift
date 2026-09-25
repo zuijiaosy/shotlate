@@ -19,6 +19,7 @@ final class SettingsModel: ObservableObject {
     @Published var playSound = Settings.shared.playSound
     @Published var copyAsFile = Settings.shared.copyAsFile
     @Published var autoSave = Settings.shared.autoSave
+    @Published var restorePins = Settings.shared.restorePins
     @Published var historyLimit = Settings.shared.historyLimit
     @Published var keepCancelledHistory = Settings.shared.keepCancelledHistory
     @Published var historyCleared = false
@@ -53,6 +54,7 @@ final class SettingsModel: ObservableObject {
         s.playSound = playSound
         s.copyAsFile = copyAsFile
         s.autoSave = autoSave
+        s.restorePins = restorePins
         s.historyLimit = historyLimit
         s.keepCancelledHistory = keepCancelledHistory
         CaptureHistory.shared.prune()
@@ -227,6 +229,7 @@ struct SettingsView: View {
 
             Section("通用") {
                 Toggle("登录时启动 Snap", isOn: $model.launchAtLogin)
+                Toggle("退出时保留贴图，下次启动时恢复", isOn: $model.restorePins)
                 if let error = model.loginItemError {
                     Text(error).font(.callout).foregroundStyle(.red)
                 }

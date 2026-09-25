@@ -41,6 +41,22 @@ final class PinManager {
         return window
     }
 
+    /// Adds a pin saved from a previous run, without changing what is shown; call `restoreView` after the last one.
+    @discardableResult
+    func restorePin(_ rep: NSBitmapImageRep, id: UUID, frame: CGRect, group: String) -> PinWindow {
+        let window = PinWindow(rep: rep, frame: frame)
+        window.id = id
+        window.group = groups.contains(group) ? group : groups[0]
+        pins.append(window)
+        return window
+    }
+
+    func restoreView(currentGroup group: String, hidden: Bool) {
+        currentGroup = groups.contains(group) ? group : groups[0]
+        isHidingAll = hidden
+        refreshVisibility()
+    }
+
     /// Whether `pin` should be on screen given hide-all, the current group and solo.
     func isShown(_ pin: PinWindow) -> Bool {
         guard !isHidingAll, pin.group == currentGroup else { return false }
@@ -49,6 +65,7 @@ final class PinManager {
 
     /// Brings windows in line with `isShown`, only touching the ones that change so the stacking order is kept.
     private func refreshVisibility() {
+        PinStore.shared.scheduleSave(self)
         for pin in pins {
             let shown = isShown(pin)
             if shown, !pin.isVisible { pin.orderFrontRegardless() }
@@ -156,6 +173,8 @@ final class PinManager {
             frame.origin.x = min(max(center.x - shown.width / 2, visible.minX), max(visible.minX, visible.maxX - shown.width))
             frame.origin.y = min(max(center.y - shown.height / 2, visible.minY), max(visible.minY, visible.maxY - shown.height))
         }
+        // Whole-point origin: a half-point one makes the window server grow the window by a point.
+        frame.origin = CGPoint(x: frame.minX.rounded(), y: frame.minY.rounded())
         let window = pin(content.rep, frame: frame)
         window.sourceText = content.text
         if fit < 1 {
@@ -214,6 +233,11 @@ final class PinWindow: NSPanel {
     /// The text this pin was rendered from, if any, for "copy text".
     var sourceText: String?
     var group = PinManager.defaultGroup
+    /// Stable identity for saving across launches; a rotated or flipped pin gets a new one because its image changed.
+    var id = UUID()
+
+    /// The frame to save: the full frame while collapsed to a thumbnail.
+    var persistentFrame: CGRect { frameBeforeThumbnail ?? frame }
     private var baseSize: CGSize
     private(set) var zoom: CGFloat = 1
     private let pinView = PinView()
@@ -303,7 +327,7 @@ final class PinWindow: NSPanel {
 
     // MARK: Zoom and opacity
 
-    func setZoom(_ newZoom: CGFloat, anchor: CGPoint? = nil) {
+    func setZoom(_ newZoom: CGFloat, anchor: CGPoint? = nil, flash: Bool = true) {
         exitThumbnail()
         let clamped = min(max(newZoom, 0.1), 8)
         let anchor = anchor ?? CGPoint(x: frame.midX, y: frame.midY)
@@ -313,7 +337,7 @@ final class PinWindow: NSPanel {
         let origin = CGPoint(x: anchor.x - rx * size.width, y: anchor.y - ry * size.height)
         zoom = clamped
         setFrame(CGRect(origin: origin, size: size), display: true)
-        pinView.flash("\(Int((clamped * 100).rounded()))%")
+        if flash { pinView.flash("\(Int((clamped * 100).rounded()))%") }
     }
 
     func setOpacity(_ value: CGFloat) {
@@ -498,6 +522,7 @@ final class PinWindow: NSPanel {
         let newRep = NSBitmapImageRep(cgImage: out)
         newRep.size = rotates ? CGSize(width: rep.size.height, height: rep.size.width) : rep.size
         rep = newRep
+        id = UUID()
         if rotates { baseSize = CGSize(width: baseSize.height, height: baseSize.width) }
         pinView.image = image(from: newRep)
         setZoom(zoom)

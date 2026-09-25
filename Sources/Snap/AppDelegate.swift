@@ -65,9 +65,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         center.addObserver(forName: .snapResumeHotKey, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
 
         TextRecognizer.warmUp()
+        if Settings.shared.restorePins { PinStore.shared.restore() }
 
         if !CaptureEngine.hasPermission {
             CGRequestScreenCaptureAccess()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        if Settings.shared.restorePins {
+            PinStore.shared.save()
+        } else {
+            PinStore.shared.clear()
         }
     }
 
