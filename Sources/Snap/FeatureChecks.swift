@@ -54,6 +54,7 @@ enum FeatureChecks {
         ("redact", redact),
         ("ocr-structure", ocrStructure),
         ("pin-translate", pinTranslate),
+        ("beautify", beautify),
     ]
 
     @MainActor
@@ -1374,5 +1375,26 @@ enum FeatureChecks {
         key(pin, "y", code: 16)
         expect(pin.showsTranslation, "and back to the translation without translating again")
         PinManager.shared.closeAll()
+    }
+
+    @MainActor static func beautify() async {
+        defer { StyleMemory.backdrop = nil }
+        StyleMemory.backdrop = 0
+        let h = CaptureHarness()
+        h.select(CGRect(x: 60, y: 60, width: 500, height: 300))
+        let margin = Backdrop.margin(for: CGSize(width: 500, height: 300))
+        guard let png = h.view.exportImage(format: .png) else { return expect(false, "export") }
+        write(png, "beautify.png")
+        expect(png.size == CGSize(width: 500 + margin * 2, height: 300 + margin * 2), "adds \(margin)pt margins (\(png.size))")
+        let corner = png.color(atPoint: CGPoint(x: 3, y: 3))!
+        expect(corner.alphaComponent > 0.99 && corner.blueComponent > 0.8 && corner.redComponent > 0.3 && corner.greenComponent < 0.75,
+               "the margin is the purple-blue gradient (\(corner))")
+        let center = png.color(atPoint: CGPoint(x: margin + 250, y: margin + 150))!, original = h.original(CGPoint(x: 310, y: 210))!
+        expect(abs(center.redComponent - original.redComponent) < 0.05, "the capture sits in the middle")
+        let jpeg = h.view.exportImage(format: .jpeg)
+        expect(jpeg?.size == png.size, "JPEG gets the backdrop too (it is opaque)")
+        expect(h.view.exportImage(format: .png, shadow: false)?.size == CGSize(width: 500, height: 300), "pins stay without a backdrop")
+        StyleMemory.backdrop = nil
+        expect(h.view.exportImage(format: .png, shadow: false)?.size == CGSize(width: 500, height: 300), "backdrop off: plain export")
     }
 }

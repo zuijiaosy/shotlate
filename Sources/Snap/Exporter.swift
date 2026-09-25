@@ -6,6 +6,27 @@ struct ExportOptions {
     var cornerRadius: CGFloat
     var shadow: Bool
     var format: ImageFormat
+    /// Puts the capture on a backdrop with margins, like the screenshots in blog posts and slides.
+    var backdrop: Backdrop? = nil
+}
+
+/// A gradient (or flat) background for beautified exports.
+struct Backdrop: Equatable {
+    var title: String
+    var colors: [NSColor]
+
+    static let presets: [Backdrop] = [
+        Backdrop(title: "紫蓝", colors: [NSColor(srgbRed: 0.56, green: 0.49, blue: 0.94, alpha: 1), NSColor(srgbRed: 0.35, green: 0.65, blue: 0.97, alpha: 1)]),
+        Backdrop(title: "橙粉", colors: [NSColor(srgbRed: 1.0, green: 0.70, blue: 0.28, alpha: 1), NSColor(srgbRed: 1.0, green: 0.44, blue: 0.57, alpha: 1)]),
+        Backdrop(title: "青绿", colors: [NSColor(srgbRed: 0.26, green: 0.88, blue: 0.69, alpha: 1), NSColor(srgbRed: 0.23, green: 0.55, blue: 1.0, alpha: 1)]),
+        Backdrop(title: "石墨", colors: [NSColor(srgbRed: 0.23, green: 0.25, blue: 0.29, alpha: 1), NSColor(srgbRed: 0.12, green: 0.13, blue: 0.16, alpha: 1)]),
+        Backdrop(title: "浅灰", colors: [NSColor(srgbRed: 0.95, green: 0.96, blue: 0.97, alpha: 1), NSColor(srgbRed: 0.87, green: 0.89, blue: 0.91, alpha: 1)]),
+    ]
+
+    /// Margin around the capture: grows with its size, within sensible limits.
+    static func margin(for size: CGSize) -> CGFloat {
+        min(96, max(32, min(size.width, size.height) * 0.1)).rounded()
+    }
 }
 
 enum Exporter {
@@ -15,9 +36,9 @@ enum Exporter {
     /// Rounded corners and the drop shadow are applied here, on transparent padding.
     static func render(renderer: ContentRenderer, selection: CGRect, scale: CGFloat,
                        items: [AnnotationItem], translation: [TranslatedBlock], options: ExportOptions) -> NSBitmapImageRep? {
-        // JPEG has no alpha, so a shadow on transparent padding would turn black.
-        let shadow = options.shadow && options.format == .png
-        let padding = shadow ? shadowPadding : 0
+        // JPEG has no alpha, so a shadow on transparent padding would turn black; a backdrop is opaque, so it can.
+        let shadow = options.backdrop != nil || (options.shadow && options.format == .png)
+        let padding = options.backdrop.map { _ in Backdrop.margin(for: selection.size) } ?? (shadow ? shadowPadding : 0)
         let sizePoints = CGSize(width: selection.width + padding * 2, height: selection.height + padding * 2)
         let width = Int((sizePoints.width * scale).rounded())
         let height = Int((sizePoints.height * scale).rounded())
@@ -37,10 +58,20 @@ enum Exporter {
         defer { NSGraphicsContext.restoreGraphicsState() }
 
         let content = CGRect(x: padding, y: padding, width: selection.width, height: selection.height)
-        let radius = min(options.cornerRadius, min(selection.width, selection.height) / 2)
+        // On a backdrop square corners look unfinished; give them a small radius at least.
+        let wantedRadius = options.backdrop == nil ? options.cornerRadius : max(options.cornerRadius, 10)
+        let radius = min(wantedRadius, min(selection.width, selection.height) / 2)
         let shape = NSBezierPath(roundedRect: content, xRadius: radius, yRadius: radius)
 
-        if options.format == .jpeg {
+        if let backdrop = options.backdrop {
+            let canvas = CGRect(origin: .zero, size: sizePoints)
+            if backdrop.colors.count > 1, let gradient = NSGradient(colors: backdrop.colors) {
+                gradient.draw(in: canvas, angle: -45)
+            } else {
+                (backdrop.colors.first ?? .white).setFill()
+                canvas.fill()
+            }
+        } else if options.format == .jpeg {
             NSColor.white.setFill()
             NSBezierPath(rect: CGRect(origin: .zero, size: sizePoints)).fill()
         }

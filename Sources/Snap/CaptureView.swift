@@ -49,6 +49,11 @@ enum StyleMemory {
     static var mosaicEffect: MosaicEffect = .pixelate
     static var hexColor = true
     static var lastSelection: [CGDirectDisplayID: CGRect] = [:]
+    /// Index into `Backdrop.presets`, or nil for no backdrop; remembered across launches.
+    static var backdrop: Int? {
+        get { UserDefaults.standard.object(forKey: "output.backdrop") as? Int }
+        set { UserDefaults.standard.set(newValue, forKey: "output.backdrop") }
+    }
     /// Locked selection shape, remembered across launches like Snipaste does.
     static var aspectRatio: AspectRatio? {
         get { AspectRatio(UserDefaults.standard.string(forKey: "capture.aspectRatio") ?? "") }
@@ -199,6 +204,10 @@ final class CaptureView: NSView {
         topBar.onSize = { [unowned self] in self.applyTypedSize($0) }
         topBar.onRatio = { [unowned self] in self.applyRatio($0) }
         topBar.onEndEditing = { [unowned self] in self.window?.makeFirstResponder(self) }
+        topBar.onBackdrop = { [unowned self] index in
+            StyleMemory.backdrop = index
+            self.showToast(index.map { "导出时加「\(Backdrop.presets[$0].title)」背景和边距" } ?? "导出时不加背景", duration: 1.5)
+        }
         updateHistoryButtons()
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self))
     }
@@ -1491,6 +1500,10 @@ final class CaptureView: NSView {
         topBar.onSize = { [unowned self] in self.applyTypedSize($0) }
         topBar.onRatio = { [unowned self] in self.applyRatio($0) }
         topBar.onEndEditing = { [unowned self] in self.window?.makeFirstResponder(self) }
+        topBar.onBackdrop = { [unowned self] index in
+            StyleMemory.backdrop = index
+            self.showToast(index.map { "导出时加「\(Backdrop.presets[$0].title)」背景和边距" } ?? "导出时不加背景", duration: 1.5)
+        }
         }
         shiftDown = shift
 
@@ -1881,8 +1894,10 @@ final class CaptureView: NSView {
     /// `base` replaces the frozen screen, for a transparent board exported over what is on screen now.
     func exportImage(format: ImageFormat, shadow: Bool? = nil, base: CGImage? = nil) -> NSBitmapImageRep? {
         // Boards are full-screen pictures: no rounded corners or drop shadow.
+        // Pins (shadow false) and boards stay plain; copies and saves get the backdrop if one is chosen.
+        let backdrop = mode.isBoard || shadow == false ? nil : StyleMemory.backdrop.flatMap { Backdrop.presets.indices.contains($0) ? Backdrop.presets[$0] : nil }
         let options = ExportOptions(cornerRadius: mode.isBoard ? 0 : cornerRadius, shadow: mode.isBoard ? false : shadow ?? shadowEnabled,
-                                    format: format)
+                                    format: format, backdrop: backdrop)
         var renderer = self.renderer
         if let base {
             renderer = ContentRenderer(base: NSImage(cgImage: base, size: bounds.size), bounds: bounds, effect: { _ in NSImage(cgImage: base, size: self.bounds.size) })

@@ -549,6 +549,9 @@ extension NSColor {
 final class TopBarView: PanelView, NSTextFieldDelegate {
     private let sizeLabel = NSTextField(string: "")
     private let ratioButton = NSButton(title: "", target: nil, action: nil)
+    private let backdropButton = NSButton(title: "", target: nil, action: nil)
+    var onBackdrop: ((Int?) -> Void)?
+    private var backdropIndex: Int? = StyleMemory.backdrop
     private var sizeWidth: NSLayoutConstraint!
     private(set) var ratio: AspectRatio?
     var onSize: ((CGSize) -> Void)?
@@ -603,7 +606,12 @@ final class TopBarView: PanelView, NSTextFieldDelegate {
         shadowBox.controlSize = .small
         shadowBox.toolTip = "导出时加投影（仅 PNG）"
 
-        [sizeLabel, ratioButton, radiusIcon, slider, shadowBox].forEach { stack.addArrangedSubview($0) }
+        backdropButton.isBordered = false
+        backdropButton.target = self
+        backdropButton.action = #selector(nextBackdrop)
+        backdropButton.toolTip = "美化：导出时把截图放在背景上并加边距。点击切换 关 → 紫蓝 → 橙粉 → 青绿 → 石墨 → 浅灰"
+        updateBackdropTitle()
+        [sizeLabel, ratioButton, radiusIcon, slider, shadowBox, backdropButton].forEach { stack.addArrangedSubview($0) }
         stack.spacing = 6
         stack.setCustomSpacing(8, after: sizeLabel)
         stack.setCustomSpacing(12, after: ratioButton)
@@ -664,6 +672,28 @@ final class TopBarView: PanelView, NSTextFieldDelegate {
         return false
     }
 
+    @objc private func nextBackdrop() {
+        if let i = backdropIndex {
+            backdropIndex = i + 1 < Backdrop.presets.count ? i + 1 : nil
+        } else {
+            backdropIndex = 0
+        }
+        updateBackdropTitle()
+        fit()
+        onBackdrop?(backdropIndex)
+    }
+
+    private func updateBackdropTitle() {
+        let title = backdropIndex.map { Backdrop.presets[$0].title } ?? "背景"
+        backdropButton.image = symbolImage("sparkles", size: 11)
+        backdropButton.imagePosition = .imageLeading
+        backdropButton.contentTintColor = .white
+        backdropButton.attributedTitle = NSAttributedString(string: title, attributes: [
+            .foregroundColor: NSColor.white.withAlphaComponent(backdropIndex == nil ? 0.75 : 1),
+            .font: NSFont.systemFont(ofSize: 11, weight: backdropIndex == nil ? .regular : .bold),
+        ])
+    }
+
     @objc private func nextRatio() {
         let presets = AspectRatio.presets
         if let ratio, let i = presets.firstIndex(of: ratio) {
@@ -697,6 +727,7 @@ final class TopBarView: PanelView, NSTextFieldDelegate {
         sizeLabel.isEditable = visible
         guard slider.isHidden == visible else { return }
         ratioButton.isHidden = !visible
+        backdropButton.isHidden = !visible
         radiusIcon.isHidden = !visible
         slider.isHidden = !visible
         shadowBox.isHidden = !visible
