@@ -326,3 +326,33 @@ import Testing
         #expect(tolerant.add(withKnob(Self.frame(scroll: 30, header: false), 128)) == .appended(30))
     }
 }
+
+@Suite struct ClipboardTextTests {
+    @Test func parsesHexForms() {
+        #expect(ColorText.parse("#FF8000")?.hex == "#FF8000")
+        #expect(ColorText.parse(" #f80 ")?.hex == "#FF8800")
+        #expect(ColorText.parse("#11223344")?.hex == "#112233")
+        #expect(ColorText.parse("#12345") == nil)
+        #expect(ColorText.parse("#GG0000") == nil)
+    }
+
+    @Test func parsesRGBForms() {
+        #expect(ColorText.parse("rgb(255, 128, 0)")?.hex == "#FF8000")
+        #expect(ColorText.parse("rgba(255, 128, 0, 0.5)")?.hex == "#FF8000")
+        #expect(ColorText.parse("10, 20, 30")?.hex == "#0A141E")
+        #expect(ColorText.parse("10 20 30")?.hex == "#0A141E")
+        #expect(ColorText.parse("1.0, 0.5, 0")?.hex == "#FF8000")
+        #expect(ColorText.parse("256, 0, 0") == nil)
+        #expect(ColorText.parse("1.5, 0, 0") == nil)
+        #expect(ColorText.parse("10, 20") == nil)
+        #expect(ColorText.parse("hello world again") == nil)
+    }
+
+    @Test func detectsCode() {
+        #expect(CodeText.looksLikeCode("{\n  \"a\": 1\n}"))
+        #expect(CodeText.looksLikeCode("func add(a: Int) -> Int {\n    return a + 1\n}"))
+        #expect(CodeText.looksLikeCode("import os\nprint(os.getcwd())\n"))
+        #expect(!CodeText.looksLikeCode("明天下午三点开会，记得带上周报。"))
+        #expect(!CodeText.looksLikeCode("The quick brown fox jumps over the lazy dog.\nSecond sentence here."))
+    }
+}

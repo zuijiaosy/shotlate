@@ -16,6 +16,7 @@ enum FeatureChecks {
     @MainActor static let checks: [(String, @MainActor () async -> Void)] = [
         ("pins-hide", pinsHide),
         ("pin-keys", pinKeys),
+        ("pin-clipboard", pinClipboard),
     ]
 
     @MainActor
@@ -94,5 +95,60 @@ enum FeatureChecks {
         key(pin, "\u{1b}", code: 53, flags: .shift)
         expect(!manager.pins.contains { $0 === pin }, "⇧Esc closes the pin")
         expect(manager.hasHistory == before, "⇧Esc does not keep it for restore")
+    }
+
+    @MainActor static func pinClipboard() async {
+        let manager = PinManager.shared
+        let pb = NSPasteboard(name: NSPasteboard.Name("app.snap.check"))
+        func pinned(_ fill: () -> Void) -> [PinWindow] {
+            pb.clearContents()
+            fill()
+            let before = manager.pins.count
+            manager.pinClipboard(pb)
+            return Array(manager.pins.dropFirst(before))
+        }
+        func pixel(_ pin: PinWindow, _ x: Int, _ y: Int) -> NSColor? { pin.rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) }
+
+        let color = pinned { pb.setString("#FF8000", forType: .string) }
+        expect(color.count == 1 && color[0].sourceText == "#FF8000", "hex text becomes a color card")
+        if let c = color.first.flatMap({ pixel($0, 20, 20) }) {
+            expect(abs(c.redComponent - 1) < 0.02 && abs(c.greenComponent - 0.5) < 0.02 && c.blueComponent < 0.02, "card swatch is the color (\(c))")
+        }
+        color.first.map { write($0.rep, "pin-color.png") }
+
+        let code = "func add(a: Int) -> Int {\n    return a + 1\n}"
+        let text = pinned { pb.setString(code, forType: .string) }
+        expect(text.count == 1 && text[0].sourceText == code, "plain text becomes a text pin that keeps its text")
+        if let t = text.first {
+            expect(t.rep.size.width > 100 && t.rep.size.width <= ClipboardPinSource.maxTextWidth + 24, "text pin wraps within the max width (\(t.rep.size))")
+            let corner = pixel(t, 2, 2)
+            expect(corner.map { $0.redComponent > 0.98 && $0.greenComponent > 0.98 } ?? false, "text pin has a white card background")
+            write(t.rep, "pin-code.png")
+        }
+
+        let long = String(repeating: "中文段落会按宽度换行，不会无限拉长。", count: 30)
+        if let p = pinned({ pb.setString(long, forType: .string) }).first {
+            expect(p.rep.size.width <= ClipboardPinSource.maxTextWidth + 24 && p.rep.size.height > 100, "long prose wraps (\(p.rep.size))")
+            write(p.rep, "pin-prose.png")
+        }
+
+        let html = pinned { pb.setString("<b>Bold</b> and <i>italic</i> <span style='color:red'>red</span>", forType: .html); pb.setString("Bold and italic red", forType: .string) }
+        expect(html.count == 1 && html[0].sourceText == "Bold and italic red", "HTML is rendered and keeps the plain text")
+        html.first.map { write($0.rep, "pin-html.png") }
+
+        let dir = outputDirectory.appendingPathComponent("files", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let a = dir.appendingPathComponent("a.png"), b = dir.appendingPathComponent("b.png"), txt = dir.appendingPathComponent("notes.txt")
+        try? sampleRep(color: .systemRed).representation(using: .png, properties: [:])?.write(to: a)
+        try? sampleRep(color: .systemBlue).representation(using: .png, properties: [:])?.write(to: b)
+        try? "hello".write(to: txt, atomically: true, encoding: .utf8)
+        let images = pinned { pb.writeObjects([a as NSURL, b as NSURL]) }
+        expect(images.count == 2, "two copied image files become two pins")
+        let paths = pinned { pb.writeObjects([txt as NSURL]) }
+        expect(paths.count == 1 && paths[0].sourceText == txt.path, "a non-image file pins its path as text")
+
+        let empty = pinned { }
+        expect(empty.isEmpty, "empty clipboard pins nothing")
+        manager.closeAll()
     }
 }

@@ -27,27 +27,43 @@ final class PinManager {
         return window
     }
 
-    /// Pins the image on the clipboard, centered on the mouse. Returns false when there is no image.
+    /// Pins what is on the clipboard (images, image files, colors, rich or plain text), centered on the mouse.
+    /// Returns false when there is nothing that can be pinned.
     @discardableResult
-    func pinClipboard() -> Bool {
-        guard let image = NSPasteboard.general.readObjects(forClasses: [NSImage.self])?.first as? NSImage,
-              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
-        else {
-            HUD.show("剪贴板里没有图片")
-            return false
-        }
-        let rep = NSBitmapImageRep(cgImage: cg)
-        let size = image.size.width > 0 ? image.size : CGSize(width: cg.width, height: cg.height)
-        rep.size = size
+    func pinClipboard(_ pasteboard: NSPasteboard = .general) -> Bool {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
-        var frame = CGRect(x: mouse.x - size.width / 2, y: mouse.y - size.height / 2, width: size.width, height: size.height)
-        if let visible = screen?.visibleFrame {
-            frame.origin.x = min(max(frame.minX, visible.minX), max(visible.minX, visible.maxX - frame.width))
-            frame.origin.y = min(max(frame.minY, visible.minY), max(visible.minY, visible.maxY - frame.height))
+        let contents = ClipboardPinSource.read(pasteboard, scale: screen?.backingScaleFactor ?? 2)
+        guard !contents.isEmpty else {
+            HUD.show("剪贴板里没有可以贴的内容")
+            return false
         }
-        pin(rep, frame: frame)
+        // Several image files fan out from the cursor so they don't cover each other exactly.
+        for (i, content) in contents.enumerated() {
+            let offset = CGFloat(i) * 24
+            pin(content, centeredAt: CGPoint(x: mouse.x + offset, y: mouse.y - offset), on: screen)
+        }
         return true
+    }
+
+    /// Places a pin centered on `center`, kept inside the screen and scaled down if it is larger than the screen.
+    @discardableResult
+    func pin(_ content: PinContent, centeredAt center: CGPoint, on screen: NSScreen?) -> PinWindow {
+        let size = content.rep.size
+        var frame = CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2, width: size.width, height: size.height)
+        var fit: CGFloat = 1
+        if let visible = screen?.visibleFrame {
+            fit = min(1, visible.width * 0.9 / max(size.width, 1), visible.height * 0.9 / max(size.height, 1))
+            let shown = CGSize(width: size.width * fit, height: size.height * fit)
+            frame.origin.x = min(max(center.x - shown.width / 2, visible.minX), max(visible.minX, visible.maxX - shown.width))
+            frame.origin.y = min(max(center.y - shown.height / 2, visible.minY), max(visible.minY, visible.maxY - shown.height))
+        }
+        let window = pin(content.rep, frame: frame)
+        window.sourceText = content.text
+        if fit < 1 {
+            window.setZoom(fit, anchor: frame.origin)
+        }
+        return window
     }
 
     func restoreLast() {
@@ -95,6 +111,8 @@ final class PinManager {
 /// A screenshot floating above other windows. Scroll to zoom, ⌥-scroll for opacity, double-click to close.
 final class PinWindow: NSPanel {
     private(set) var rep: NSBitmapImageRep
+    /// The text this pin was rendered from, if any, for "copy text".
+    var sourceText: String?
     private var baseSize: CGSize
     private(set) var zoom: CGFloat = 1
     private let pinView = PinView()
@@ -188,6 +206,8 @@ final class PinWindow: NSPanel {
             setZoom(zoom * 1.1)
         } else if flags.isEmpty, key == "-" {
             setZoom(zoom / 1.1)
+        } else if flags == [.command, .shift] && key == "c" {
+            copyText()
         } else if flags == .command && key == "c" {
             copyImage()
         } else if flags == .command && key == "s" {
@@ -216,6 +236,13 @@ final class PinWindow: NSPanel {
     @objc func copyImage() {
         Exporter.copy(rep)
         pinView.flash("已复制")
+    }
+
+    @objc func copyText() {
+        guard let sourceText else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(sourceText, forType: .string)
+        pinView.flash("已复制文字")
     }
 
     @objc func saveImage() {
@@ -323,6 +350,11 @@ final class PinWindow: NSPanel {
             return item
         }
         menu.addItem(item("复制", #selector(copyImage), "c"))
+        if sourceText != nil {
+            let copyTextItem = item("复制文字", #selector(copyText), "c")
+            copyTextItem.keyEquivalentModifierMask = [.command, .shift]
+            menu.addItem(copyTextItem)
+        }
         menu.addItem(item("保存", #selector(saveImage), "s"))
         menu.addItem(item("识别文字", #selector(recognizeText)))
         menu.addItem(.separator())
