@@ -18,6 +18,19 @@ scripts/test.sh           # 运行单元测试
 
 如果钥匙串里有 `Apple Development` 证书，构建脚本会自动用它签名，也可以通过 `SIGN_IDENTITY` 指定。屏幕录制权限和签名绑定：用 ad-hoc 签名时，每次重新构建后系统可能会再次请求权限。
 
+```bash
+ARCHS="arm64 x86_64" scripts/build-app.sh   # 通用二进制（Apple 芯片 + Intel）
+scripts/make-dmg.sh 0.1.0                   # 打包成 build/Snap-0.1.0.dmg
+```
+
+## 发布
+
+推送到 `main` 后，GitHub Actions（`.github/workflows/release.yml`）会运行单元测试，构建通用版 Snap.app，打包 DMG，并发布 GitHub Release，更新说明按提交信息自动生成（`feat` 归入新功能，`fix` 归入修复，提交正文里的 `- ` 列表作为细节）。
+
+- 版本号：主、次版本取自 `Resources/Info.plist`，补丁号在上一个同系列标签上加一；要开始 0.2 系列，把 Info.plist 改成 `0.2.0`。
+- 提交信息里带 `[skip release]` 时只推送、不发布。
+- 默认 ad-hoc 签名，首次打开需要右键「打开」。在仓库 Secrets 里配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD` 后，改用 Developer ID 签名并公证。
+
 ## 使用
 
 首次启动时，请在「系统设置 → 隐私与安全性 → 屏幕与系统录音」中允许 Snap，然后重新打开它。

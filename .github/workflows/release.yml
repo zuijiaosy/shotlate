@@ -1,0 +1,119 @@
+# Every push to main builds a universal Snap.app, packs it into a DMG and publishes a GitHub release
+# whose notes list the commits since the previous release.
+#
+# Version: major.minor come from CFBundleShortVersionString in Resources/Info.plist; the patch number
+# counts up from the latest vX.Y.* tag. Bump Info.plist to 0.2.0 to start the 0.2 series.
+# Put "[skip release]" in a commit message to push without releasing.
+#
+# Signing: ad-hoc by default, which macOS Gatekeeper warns about on first launch. Add these repository
+# secrets to sign with a Developer ID and notarize instead:
+#   MACOS_CERTIFICATE           base64 of the "Developer ID Application" .p12
+#   MACOS_CERTIFICATE_PASSWORD  password of that .p12
+#   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   for notarytool (app-specific password)
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: macos-26
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Test
+        run: scripts/test.sh
+
+      - name: Pick version
+        id: version
+        run: |
+          base="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          major_minor="${base%.*}"
+          last="$(git tag -l "v${major_minor}.*" --sort=-v:refname | head -1)"
+          if [ -n "$last" ]; then
+            version="${major_minor}.$(( ${last##*.} + 1 ))"
+          else
+            version="$base"
+          fi
+          previous="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version (previous: ${previous:-none})"
+
+      - name: Import signing certificate
+        if: env.MACOS_CERTIFICATE != ''
+        env:
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          identity="$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
+          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          ARCHS: arm64 x86_64
+        run: |
+          scripts/build-app.sh
+          lipo -archs build/Snap.app/Contents/MacOS/Snap
+
+      - name: Package DMG
+        run: scripts/make-dmg.sh "${{ steps.version.outputs.version }}"
+
+      - name: Notarize
+        if: env.MACOS_CERTIFICATE != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          dmg="build/Snap-${{ steps.version.outputs.version }}.dmg"
+          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "$dmg"
+
+      - name: Write release notes
+        run: |
+          {
+            scripts/release-notes.sh "${{ steps.version.outputs.previous }}"
+            echo "### 安装"
+            echo
+            echo "下载 \`Snap-${{ steps.version.outputs.version }}.dmg\`，打开后把 Snap 拖进「应用程序」。支持 macOS 14 及以上，Apple 芯片和 Intel 通用。"
+            if [ -z "$MACOS_CERTIFICATE" ]; then
+              echo
+              echo "这个版本没有经过 Apple 公证，首次打开时请在「应用程序」里右键 Snap →「打开」；如果提示「已损坏」，在终端运行 \`xattr -dr com.apple.quarantine /Applications/Snap.app\`。更新后可能需要重新授予屏幕录制权限。"
+            fi
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          gh release create "v$version" "build/Snap-$version.dmg" \
+            --target "$GITHUB_SHA" \
+            --title "Snap $version" \
+            --notes-file "$RUNNER_TEMP/notes.md"
