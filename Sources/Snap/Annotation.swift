@@ -1,0 +1,479 @@
+import AppKit
+
+enum Tool: String, CaseIterable {
+    case rectangle, ellipse, line, arrow, pen, mosaic, text, number
+
+    var title: String {
+        switch self {
+        case .rectangle: return "矩形"
+        case .ellipse: return "椭圆"
+        case .line: return "直线"
+        case .arrow: return "箭头"
+        case .pen: return "画笔"
+        case .mosaic: return "马赛克"
+        case .text: return "文字"
+        case .number: return "序号"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .rectangle: return "square"
+        case .ellipse: return "circle"
+        case .line: return "line.diagonal"
+        case .arrow: return "arrow.up.right"
+        case .pen: return "scribble"
+        case .mosaic: return "checkerboard.rectangle"
+        case .text: return "textformat"
+        case .number: return "1.circle"
+        }
+    }
+
+    /// Single-key shortcut while the capture overlay is active.
+    var key: String {
+        switch self {
+        case .rectangle: return "r"
+        case .ellipse: return "o"
+        case .line: return "l"
+        case .arrow: return "a"
+        case .pen: return "p"
+        case .mosaic: return "m"
+        case .text: return "t"
+        case .number: return "n"
+        }
+    }
+
+    /// What "size" means differs per tool: stroke width, brush width, font size or badge diameter.
+    var sizeRange: ClosedRange<CGFloat> {
+        switch self {
+        case .mosaic: return 6...120
+        case .text: return 10...120
+        case .number: return 14...80
+        default: return 1...40
+        }
+    }
+
+    var sizePresets: [CGFloat] {
+        switch self {
+        case .mosaic: return [12, 24, 48]
+        case .text: return [14, 20, 32]
+        case .number: return [20, 26, 36]
+        default: return [2, 4, 8]
+        }
+    }
+
+    var defaultSize: CGFloat { sizePresets[1] }
+
+    /// Freehand tools always draw, even when the stroke starts on an existing annotation.
+    var isFreehand: Bool { self == .pen || self == .mosaic }
+}
+
+enum MosaicMode: String { case brush, rect }
+enum MosaicEffect: String { case pixelate, blur }
+
+enum Shape: Equatable {
+    case rectangle(CGRect)
+    case ellipse(CGRect)
+    case line(CGPoint, CGPoint)
+    case arrow(CGPoint, CGPoint)
+    case pen([CGPoint])
+    case mosaicRect(CGRect)
+    case mosaicBrush([CGPoint])
+    /// Text origin is the top-left of the first line; lines wrap at `width`.
+    case text(String, CGPoint, width: CGFloat)
+    case number(CGPoint)
+}
+
+struct AnnotationItem: Equatable {
+    var id = UUID()
+    var shape: Shape
+    var color: NSColor
+    var size: CGFloat
+    var effect: MosaicEffect = .pixelate
+
+    var tool: Tool {
+        switch shape {
+        case .rectangle: return .rectangle
+        case .ellipse: return .ellipse
+        case .line: return .line
+        case .arrow: return .arrow
+        case .pen: return .pen
+        case .mosaicRect, .mosaicBrush: return .mosaic
+        case .text: return .text
+        case .number: return .number
+        }
+    }
+}
+
+/// Resize handles of a rectangle, in a flipped (top-left origin) space.
+enum ResizeHandle: CaseIterable {
+    case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
+
+    func point(in r: CGRect) -> CGPoint {
+        switch self {
+        case .topLeft: return CGPoint(x: r.minX, y: r.minY)
+        case .top: return CGPoint(x: r.midX, y: r.minY)
+        case .topRight: return CGPoint(x: r.maxX, y: r.minY)
+        case .right: return CGPoint(x: r.maxX, y: r.midY)
+        case .bottomRight: return CGPoint(x: r.maxX, y: r.maxY)
+        case .bottom: return CGPoint(x: r.midX, y: r.maxY)
+        case .bottomLeft: return CGPoint(x: r.minX, y: r.maxY)
+        case .left: return CGPoint(x: r.minX, y: r.midY)
+        }
+    }
+
+    /// Moves the edges this handle controls by `d`. Dragging past the opposite edge flips the rect.
+    func resize(_ r: CGRect, by d: CGPoint) -> CGRect {
+        var minX = r.minX, maxX = r.maxX, minY = r.minY, maxY = r.maxY
+        if [.topLeft, .left, .bottomLeft].contains(self) { minX += d.x }
+        if [.topRight, .right, .bottomRight].contains(self) { maxX += d.x }
+        if [.topLeft, .top, .topRight].contains(self) { minY += d.y }
+        if [.bottomLeft, .bottom, .bottomRight].contains(self) { maxY += d.y }
+        return CGRect(corners: CGPoint(x: minX, y: minY), CGPoint(x: maxX, y: maxY))
+    }
+
+    var cursor: NSCursor {
+        if #available(macOS 15.0, *) {
+            let position: NSCursor.FrameResizePosition
+            switch self {
+            case .topLeft: position = .topLeft
+            case .top: position = .top
+            case .topRight: position = .topRight
+            case .right: position = .right
+            case .bottomRight: position = .bottomRight
+            case .bottom: position = .bottom
+            case .bottomLeft: position = .bottomLeft
+            case .left: position = .left
+            }
+            return .frameResize(position: position, directions: .all)
+        }
+        switch self {
+        case .left, .right: return .resizeLeftRight
+        case .top, .bottom: return .resizeUpDown
+        default: return .crosshair
+        }
+    }
+}
+
+/// A draggable control point of an annotation.
+enum ItemHandle: Equatable {
+    case rect(ResizeHandle)
+    case start
+    case end
+}
+
+// MARK: - Geometry
+
+extension AnnotationItem {
+    static func textFont(size: CGFloat) -> NSFont {
+        .systemFont(ofSize: size, weight: .medium)
+    }
+
+    static func textAttributes(color: NSColor, size: CGFloat) -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        return [.font: textFont(size: size), .foregroundColor: color, .paragraphStyle: paragraph]
+    }
+
+    static func textSize(_ text: String, size: CGFloat, width: CGFloat) -> CGSize {
+        let measured = NSAttributedString(string: text.isEmpty ? " " : text, attributes: textAttributes(color: .black, size: size))
+            .boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin])
+        return CGSize(width: ceil(measured.width), height: ceil(measured.height))
+    }
+
+    /// Visual bounds, including stroke width.
+    var bounds: CGRect {
+        let pad = size / 2 + 1
+        switch shape {
+        case let .rectangle(r), let .ellipse(r):
+            return r.insetBy(dx: -pad, dy: -pad)
+        case let .mosaicRect(r):
+            return r
+        case let .line(a, b):
+            return CGRect(corners: a, b).insetBy(dx: -pad, dy: -pad)
+        case let .arrow(a, b):
+            let head = Self.arrowHeadWidth(size) / 2
+            return CGRect(corners: a, b).insetBy(dx: -head, dy: -head)
+        case let .pen(points), let .mosaicBrush(points):
+            return points.reduce(CGRect.null) { $0.union(CGRect(origin: $1, size: .zero)) }.insetBy(dx: -pad, dy: -pad)
+        case let .text(text, origin, width):
+            return CGRect(origin: origin, size: Self.textSize(text, size: size, width: width))
+        case let .number(center):
+            return CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
+        }
+    }
+
+    /// Whether a click at `p` lands on this annotation. Outlined shapes are hit on their stroke only,
+    /// so a new shape can still be drawn inside an existing rectangle.
+    func contains(_ p: CGPoint) -> Bool {
+        let tolerance = max(5, size / 2 + 3)
+        switch shape {
+        case let .rectangle(r):
+            let outer = r.insetBy(dx: -tolerance, dy: -tolerance)
+            let inner = r.insetBy(dx: tolerance, dy: tolerance)
+            return outer.contains(p) && (inner.isEmpty || !inner.contains(p))
+        case let .ellipse(r):
+            let a = max(r.width / 2, 1), b = max(r.height / 2, 1)
+            let dx = (p.x - r.midX) / a, dy = (p.y - r.midY) / b
+            let radial = (dx * dx + dy * dy).squareRoot()
+            return abs(radial - 1) * min(a, b) <= tolerance
+        case let .mosaicRect(r):
+            return r.contains(p)
+        case let .line(a, b):
+            return distance(p, a, b) <= tolerance
+        case let .arrow(a, b):
+            return distance(p, a, b) <= max(tolerance, Self.arrowHeadWidth(size) / 2)
+        case let .pen(points), let .mosaicBrush(points):
+            if points.count == 1 { return hypot(p.x - points[0].x, p.y - points[0].y) <= tolerance }
+            return zip(points, points.dropFirst()).contains { distance(p, $0, $1) <= tolerance }
+        case .text:
+            return bounds.insetBy(dx: -4, dy: -4).contains(p)
+        case let .number(c):
+            return hypot(p.x - c.x, p.y - c.y) <= size / 2 + 3
+        }
+    }
+
+    var handles: [(ItemHandle, CGPoint)] {
+        switch shape {
+        case let .rectangle(r), let .ellipse(r), let .mosaicRect(r):
+            return ResizeHandle.allCases.map { (.rect($0), $0.point(in: r)) }
+        case let .line(a, b), let .arrow(a, b):
+            return [(.start, a), (.end, b)]
+        default:
+            return []
+        }
+    }
+
+    func moved(by d: CGPoint) -> AnnotationItem {
+        var copy = self
+        func m(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x + d.x, y: p.y + d.y) }
+        switch shape {
+        case let .rectangle(r): copy.shape = .rectangle(r.offsetBy(dx: d.x, dy: d.y))
+        case let .ellipse(r): copy.shape = .ellipse(r.offsetBy(dx: d.x, dy: d.y))
+        case let .mosaicRect(r): copy.shape = .mosaicRect(r.offsetBy(dx: d.x, dy: d.y))
+        case let .line(a, b): copy.shape = .line(m(a), m(b))
+        case let .arrow(a, b): copy.shape = .arrow(m(a), m(b))
+        case let .pen(points): copy.shape = .pen(points.map(m))
+        case let .mosaicBrush(points): copy.shape = .mosaicBrush(points.map(m))
+        case let .text(text, origin, width): copy.shape = .text(text, m(origin), width: width)
+        case let .number(c): copy.shape = .number(m(c))
+        }
+        return copy
+    }
+
+    func resized(_ handle: ItemHandle, by d: CGPoint) -> AnnotationItem {
+        var copy = self
+        switch (shape, handle) {
+        case let (.rectangle(r), .rect(h)): copy.shape = .rectangle(h.resize(r, by: d))
+        case let (.ellipse(r), .rect(h)): copy.shape = .ellipse(h.resize(r, by: d))
+        case let (.mosaicRect(r), .rect(h)): copy.shape = .mosaicRect(h.resize(r, by: d))
+        case let (.line(a, b), .start): copy.shape = .line(CGPoint(x: a.x + d.x, y: a.y + d.y), b)
+        case let (.line(a, b), .end): copy.shape = .line(a, CGPoint(x: b.x + d.x, y: b.y + d.y))
+        case let (.arrow(a, b), .start): copy.shape = .arrow(CGPoint(x: a.x + d.x, y: a.y + d.y), b)
+        case let (.arrow(a, b), .end): copy.shape = .arrow(a, CGPoint(x: b.x + d.x, y: b.y + d.y))
+        default: break
+        }
+        return copy
+    }
+
+    var isMeaningful: Bool {
+        switch shape {
+        case let .rectangle(r), let .ellipse(r), let .mosaicRect(r): return r.width >= 3 && r.height >= 3
+        case let .line(a, b), let .arrow(a, b): return hypot(a.x - b.x, a.y - b.y) >= 3
+        case let .pen(points): return points.count >= 2
+        case let .mosaicBrush(points): return !points.isEmpty
+        case let .text(text, _, _): return !text.isEmpty
+        case .number: return true
+        }
+    }
+
+    static func arrowHeadWidth(_ size: CGFloat) -> CGFloat { size * 3 + 10 }
+    static func arrowHeadLength(_ size: CGFloat) -> CGFloat { size * 3 + 12 }
+}
+
+private func distance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+    let dx = b.x - a.x, dy = b.y - a.y
+    let lengthSquared = dx * dx + dy * dy
+    guard lengthSquared > 0 else { return hypot(p.x - a.x, p.y - a.y) }
+    let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared))
+    return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+}
+
+extension CGRect {
+    init(corners a: CGPoint, _ b: CGPoint) {
+        self.init(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+    }
+}
+
+// MARK: - Rendering
+
+/// One translated paragraph, laid out and ready to draw over the original text.
+struct TranslatedBlock {
+    var rect: CGRect
+    var text: String
+    var fontSize: CGFloat
+    var bold: Bool
+    var centered = false
+    var background: NSColor
+    var foreground: NSColor
+}
+
+/// Draws annotations and translations over the frozen screen, in a flipped (top-left origin) context.
+/// Shared by the on-screen view and the exporter so the saved image matches what was on screen.
+struct ContentRenderer {
+    let base: NSImage
+    let bounds: CGRect
+    let effect: (MosaicEffect) -> NSImage
+
+    func draw(items: [AnnotationItem], translation: [TranslatedBlock]) {
+        drawBase()
+        drawOverlays(items: items, draft: nil, hiddenID: nil, translation: translation)
+    }
+
+    func drawBase() {
+        base.draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+    }
+
+    /// Translations go first so annotations stay on top of them.
+    func drawOverlays(items: [AnnotationItem], draft: AnnotationItem?, hiddenID: UUID?, translation: [TranslatedBlock]) {
+        for block in translation { Self.draw(block) }
+        var number = 0
+        for item in items {
+            if case .number = item.shape { number += 1 }
+            if item.id != hiddenID { draw(item, number: number) }
+        }
+        if let draft {
+            if case .number = draft.shape { number += 1 }
+            draw(draft, number: number)
+        }
+    }
+
+    static func draw(_ block: TranslatedBlock) {
+        block.background.setFill()
+        NSBezierPath(roundedRect: block.rect.insetBy(dx: -2, dy: -1.5), xRadius: 2, yRadius: 2).fill()
+        let attributed = attributedText(block.text, size: block.fontSize, bold: block.bold, color: block.foreground,
+                                        alignment: block.centered ? .center : .natural)
+        let measured = attributed.boundingRect(with: CGSize(width: block.rect.width, height: .greatestFiniteMagnitude),
+                                               options: [.usesLineFragmentOrigin, .usesFontLeading])
+        var rect = block.rect
+        if measured.height < rect.height {
+            rect.origin.y += (rect.height - measured.height) / 2
+            rect.size.height = measured.height
+        }
+        attributed.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+    }
+
+    static func attributedText(_ text: String, size: CGFloat, bold: Bool, color: NSColor,
+                               alignment: NSTextAlignment = .natural) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.alignment = alignment
+        let font = NSFont(name: bold ? "PingFangSC-Semibold" : "PingFangSC-Regular", size: size)
+            ?? NSFont.systemFont(ofSize: size, weight: bold ? .semibold : .regular)
+        return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph])
+    }
+
+    func draw(_ item: AnnotationItem, number: Int) {
+        guard let cg = NSGraphicsContext.current?.cgContext else { return }
+        cg.saveGState()
+        defer { cg.restoreGState() }
+        cg.setStrokeColor(item.color.cgColor)
+        cg.setFillColor(item.color.cgColor)
+        cg.setLineWidth(item.size)
+        cg.setLineCap(.round)
+        cg.setLineJoin(.round)
+
+        switch item.shape {
+        case let .rectangle(r):
+            cg.setLineJoin(.miter)
+            cg.stroke(r)
+        case let .ellipse(r):
+            cg.strokeEllipse(in: r)
+        case let .line(a, b):
+            cg.strokeLineSegments(between: [a, b])
+        case let .arrow(a, b):
+            if let path = Self.arrowPath(from: a, to: b, size: item.size) {
+                cg.addPath(path)
+                cg.fillPath()
+            }
+        case let .pen(points):
+            cg.addPath(Self.smoothPath(points))
+            cg.strokePath()
+        case let .mosaicRect(r):
+            cg.clip(to: r)
+            effect(item.effect).draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+        case let .mosaicBrush(points):
+            cg.addPath(Self.smoothPath(points.count == 1 ? [points[0], points[0]] : points))
+            cg.replacePathWithStrokedPath()
+            cg.clip()
+            effect(item.effect).draw(in: bounds, from: .zero, operation: .copy, fraction: 1, respectFlipped: true, hints: nil)
+        case let .text(text, origin, width):
+            NSAttributedString(string: text, attributes: AnnotationItem.textAttributes(color: item.color, size: item.size))
+                .draw(with: CGRect(x: origin.x, y: origin.y, width: width, height: 100_000), options: [.usesLineFragmentOrigin])
+        case let .number(c):
+            let d = item.size
+            let circle = CGRect(x: c.x - d / 2, y: c.y - d / 2, width: d, height: d)
+            cg.setShadow(offset: CGSize(width: 0, height: -1), blur: 3, color: NSColor.black.withAlphaComponent(0.3).cgColor)
+            cg.fillEllipse(in: circle)
+            cg.setShadow(offset: .zero, blur: 0, color: nil)
+            cg.setStrokeColor(NSColor.white.withAlphaComponent(0.9).cgColor)
+            cg.setLineWidth(max(1.5, d / 16))
+            cg.strokeEllipse(in: circle.insetBy(dx: 0.75, dy: 0.75))
+            let label = NSAttributedString(string: "\(number)", attributes: [
+                .font: NSFont.monospacedDigitSystemFont(ofSize: d * (number >= 10 ? 0.46 : 0.56), weight: .bold),
+                .foregroundColor: Self.contrastingTextColor(for: item.color),
+            ])
+            let size = label.size()
+            label.draw(at: CGPoint(x: c.x - size.width / 2, y: c.y - size.height / 2))
+        }
+    }
+
+    static func contrastingTextColor(for color: NSColor) -> NSColor {
+        guard let c = color.usingColorSpace(.sRGB) else { return .white }
+        let luminance = 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+        return luminance > 0.6 ? .black : .white
+    }
+
+    /// Quadratic curves through the midpoints of consecutive samples: smooth, but passes near every sample.
+    static func smoothPath(_ points: [CGPoint]) -> CGPath {
+        let path = CGMutablePath()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        guard points.count > 2 else {
+            for p in points.dropFirst() { path.addLine(to: p) }
+            return path
+        }
+        for i in 1..<(points.count - 1) {
+            let mid = CGPoint(x: (points[i].x + points[i + 1].x) / 2, y: (points[i].y + points[i + 1].y) / 2)
+            path.addQuadCurve(to: mid, control: points[i])
+        }
+        path.addLine(to: points[points.count - 1])
+        return path
+    }
+
+    /// A filled arrow whose shaft widens from the tail towards the head, like WeChat's and QQ's.
+    static func arrowPath(from tail: CGPoint, to tip: CGPoint, size: CGFloat) -> CGPath? {
+        let dx = tip.x - tail.x, dy = tip.y - tail.y
+        let length = hypot(dx, dy)
+        guard length > 1 else { return nil }
+        let ux = dx / length, uy = dy / length
+        let nx = -uy, ny = ux
+        let headLength = min(AnnotationItem.arrowHeadLength(size), length * 0.6)
+        let headHalf = min(AnnotationItem.arrowHeadWidth(size) / 2, headLength * 0.7)
+        let tailHalf = max(0.5, size * 0.15)
+        let neckHalf = min(max(size * 0.6, 1.5), headHalf * 0.6)
+        let base = CGPoint(x: tip.x - ux * headLength, y: tip.y - uy * headLength)
+
+        func p(_ o: CGPoint, _ half: CGFloat) -> CGPoint { CGPoint(x: o.x + nx * half, y: o.y + ny * half) }
+        let path = CGMutablePath()
+        path.move(to: p(tail, tailHalf))
+        path.addLine(to: p(base, neckHalf))
+        path.addLine(to: p(base, headHalf))
+        path.addLine(to: tip)
+        path.addLine(to: p(base, -headHalf))
+        path.addLine(to: p(base, -neckHalf))
+        path.addLine(to: p(tail, -tailHalf))
+        path.closeSubpath()
+        return path
+    }
+}
