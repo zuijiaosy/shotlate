@@ -24,6 +24,8 @@ final class SettingsModel: ObservableObject {
     @Published var copyAsFile = Settings.shared.copyAsFile
     @Published var captureCursor = Settings.shared.captureCursor
     @Published var detectElements = Settings.shared.detectElements
+    @Published var superSnip = Settings.shared.superSnip
+    @Published var superSnipError: String?
     @Published var accessibilityTrusted = ElementCollector.isTrusted
     @Published var autoSave = Settings.shared.autoSave
     @Published var restorePins = Settings.shared.restorePins
@@ -70,6 +72,14 @@ final class SettingsModel: ObservableObject {
         s.copyAsFile = copyAsFile
         s.captureCursor = captureCursor
         s.detectElements = detectElements
+        s.superSnip = superSnip
+        if !SuperSnip.shared.setEnabled(superSnip) {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+            superSnipError = "超级截图需要辅助功能权限，授权后重新保存设置"
+        } else {
+            superSnipError = nil
+        }
         s.autoSave = autoSave
         s.restorePins = restorePins
         s.historyLimit = historyLimit
@@ -222,6 +232,10 @@ struct SettingsView: View {
                 .help("{app} 是截图时位于前台的应用，大括号里的其他内容是日期格式，例如 {yyyyMMdd_HHmmss}")
                 Toggle("复制或贴图时也自动保存", isOn: $model.autoSave)
                 Toggle("默认截取鼠标指针（截图时按 ` 切换）", isOn: $model.captureCursor)
+                Toggle("超级截图：按住 \(SuperSnip.label) 直接框选截图", isOn: $model.superSnip)
+                if let error = model.superSnipError {
+                    Text(error).font(.callout).foregroundStyle(.red)
+                }
                 Toggle("识别界面元素（按钮、输入框、面板），滚轮切换父/子元素", isOn: $model.detectElements)
                 if model.detectElements, !model.accessibilityTrusted {
                     HStack {

@@ -67,7 +67,8 @@ final class CaptureSession {
     var autoOutputs: [CaptureRequest.Output] = []
 
     /// `replay` opens straight into the most recent capture from history.
-    static func begin(replay: Bool = false, autoOutputs: [CaptureRequest.Output] = []) {
+    /// `initialSelection` (Cocoa global) opens with that area already selected, as after a super snip.
+    static func begin(replay: Bool = false, autoOutputs: [CaptureRequest.Output] = [], initialSelection: CGRect? = nil) {
         guard current == nil, !isStarting else { return }
         guard CaptureEngine.hasPermission else {
             requestPermission()
@@ -92,6 +93,7 @@ final class CaptureSession {
                 current = session
                 session.show()
                 if replay, let view = session.activeView { session.stepHistory(1, from: view) }
+                if let area = initialSelection { session.preselect(area) }
                 if let elements {
                     let nodes = await elements.value
                     if !session.isFinished { session.deliver(elements: nodes) }
@@ -399,6 +401,15 @@ final class CaptureSession {
         } else {
             view.primeCursor()
         }
+    }
+
+    /// Selects `area` (Cocoa global) on the screen that holds its center.
+    func preselect(_ area: CGRect) {
+        let center = CGPoint(x: area.midX, y: area.midY)
+        guard let index = windows.firstIndex(where: { $0.frame.contains(center) }) else { return }
+        let frame = windows[index].frame
+        views[index].preselect(CGRect(x: area.minX - frame.minX, y: frame.maxY - area.maxY, width: area.width, height: area.height))
+        windows[index].makeKeyAndOrderFront(nil)
     }
 
     /// Runs the requested outputs for `view`'s fresh selection and closes the capture.

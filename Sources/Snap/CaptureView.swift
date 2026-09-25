@@ -285,6 +285,14 @@ final class CaptureView: NSView {
         return []
     }
 
+    /// Starts with `rect` (view coordinates) selected.
+    func preselect(_ rect: CGRect) {
+        let r = rect.intersection(bounds)
+        guard r.width >= 4, r.height >= 4 else { return }
+        selection = r
+        commitSelection()
+    }
+
     /// Pin editing: the pin's rect is the canvas.
     func startPinEdit(rect: CGRect) {
         selection = rect.intersection(bounds)

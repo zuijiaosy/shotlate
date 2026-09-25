@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         TextRecognizer.warmUp()
         if Settings.shared.restorePins { PinStore.shared.restore() }
+        if Settings.shared.superSnip { SuperSnip.shared.setEnabled(true) }
 
         if !CaptureEngine.hasPermission {
             CGRequestScreenCaptureAccess()

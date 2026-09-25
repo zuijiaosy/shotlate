@@ -190,6 +190,12 @@ final class Settings {
         set { defaults.set(newValue, forKey: "capture.detectElements") }
     }
 
+    /// ⌥⌘ + drag anywhere starts a capture of that area.
+    var superSnip: Bool {
+        get { defaults.bool(forKey: "capture.superSnip") }
+        set { defaults.set(newValue, forKey: "capture.superSnip") }
+    }
+
     /// Whether a capture includes the mouse pointer by default (` toggles it while capturing).
     var captureCursor: Bool {
         get { defaults.bool(forKey: "capture.cursor") }

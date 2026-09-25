@@ -558,3 +558,27 @@ import Testing
         #expect(Snapping.snap(CGRect(x: 104, y: 10, width: 20, height: 20), to: [a, b]).minX == 103)
     }
 }
+
+@Suite struct SuperSnipTests {
+    @Test func dragWithModifiersMakesAnArea() {
+        var t = SuperSnipTracker()
+        #expect(t.handle(.down, at: CGPoint(x: 100, y: 100), modifiersHeld: true) == .track(nil))
+        #expect(t.handle(.dragged, at: CGPoint(x: 60, y: 150), modifiersHeld: true) == .track(CGRect(x: 60, y: 100, width: 40, height: 50)))
+        // Letting go of the keys mid-drag still finishes the drag that was started.
+        #expect(t.handle(.up, at: CGPoint(x: 50, y: 160), modifiersHeld: false) == .finish(CGRect(x: 50, y: 100, width: 50, height: 60)))
+        #expect(t.start == nil)
+    }
+
+    @Test func plainClicksPassThrough() {
+        var t = SuperSnipTracker()
+        #expect(t.handle(.down, at: .zero, modifiersHeld: false) == .pass)
+        #expect(t.handle(.dragged, at: CGPoint(x: 10, y: 10), modifiersHeld: false) == .pass)
+        #expect(t.handle(.up, at: CGPoint(x: 10, y: 10), modifiersHeld: false) == .pass)
+    }
+
+    @Test func tinyDragCancels() {
+        var t = SuperSnipTracker()
+        _ = t.handle(.down, at: CGPoint(x: 5, y: 5), modifiersHeld: true)
+        #expect(t.handle(.up, at: CGPoint(x: 7, y: 6), modifiersHeld: true) == .cancel)
+    }
+}

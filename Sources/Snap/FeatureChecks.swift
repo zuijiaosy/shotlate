@@ -47,6 +47,7 @@ enum FeatureChecks {
         ("magnifier", magnifierTool),
         ("pin-filters", pinFilters),
         ("pin-multi", pinMulti),
+        ("super-snip", superSnip),
     ]
 
     @MainActor
@@ -1206,5 +1207,27 @@ enum FeatureChecks {
         for _ in 0..<50 where right.sourceText == nil { try? await Task.sleep(for: .milliseconds(20)) }
         expect(right.sourceText == "https://example.com/cat.png" && right.rep.pixelsWide == 60, "a dropped image link is downloaded into the pin")
         m.closeAll()
+    }
+
+    @MainActor static func superSnip() async {
+        let h = CaptureHarness()
+        let session = CaptureSession.makeForTesting(image: h.snapshot, size: h.size,
+                                                    history: CaptureHistory(directory: outputDirectory.appendingPathComponent("ss-history")))
+        // The testing window sits at (-9000, -9000); an area inside it in global Cocoa coordinates.
+        session.preselect(CGRect(x: -9000 + 100, y: -9000 + 200, width: 300, height: 150))
+        let view = session.testing_views[0]
+        expect(view.testing_selection == CGRect(x: 100, y: h.size.height - 200 - 150, width: 300, height: 150),
+               "the dragged area opens already selected (\(String(describing: view.testing_selection)))")
+        session.finish()
+        expect(SuperSnip.cocoa(CGRect(x: 10, y: 20, width: 30, height: 40)).maxY == (NSScreen.screens.first?.frame.height ?? 0) - 20,
+               "event coordinates are flipped to Cocoa")
+        let ok = SuperSnip.shared.setEnabled(true)
+        if ElementCollector.isTrusted {
+            expect(ok && SuperSnip.shared.isRunning, "the event tap starts with permission")
+        } else {
+            expect(!ok && !SuperSnip.shared.isRunning, "without permission the tap is refused cleanly")
+            print("SKIP  live event tap: no Accessibility permission for this process")
+        }
+        SuperSnip.shared.setEnabled(false)
     }
 }
