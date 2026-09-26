@@ -4,8 +4,8 @@
 
 - 文字识别使用系统自带的 Vision 框架，在本机完成。
 - 翻译使用 OpenAI 兼容接口，默认是 DeepSeek 的 `deepseek-flash`。只发送识别出的文字，截图本身不上传。
-- 纯 Swift 编写，没有第三方依赖。要求 macOS 14 或更高版本。
-- 小：安装包约 3 MB（Apple 芯片和 Intel 通用），常驻菜单栏时内存占用约 50 MB。
+- 纯 Swift 编写，唯一的第三方依赖是负责自动更新的 [Sparkle](https://sparkle-project.org)。要求 macOS 14 或更高版本。
+- 小：安装包约 3.5 MB（Apple 芯片和 Intel 通用），常驻菜单栏时内存占用约 50 MB。
 
 官网：[shotlate.pages.dev](https://shotlate.pages.dev) · 下载：[最新版本](https://github.com/zuijiaosy/shotlate/releases/latest)
 
@@ -31,7 +31,7 @@ open build/Shotlate.app
 scripts/test.sh           # 运行单元测试
 ```
 
-如果钥匙串里有 `Apple Development` 证书，构建脚本会自动用它签名，也可以通过 `SIGN_IDENTITY` 指定。屏幕录制权限和签名绑定：用 ad-hoc 签名时，每次重新构建后系统可能会再次请求权限。
+所有构建（本机和 CI）都用同一张自签证书「Shotlate Release」签名（`scripts/sign-app.sh`）。屏幕录制权限和签名绑定，签名不变，换版本后权限就还在；自动更新也要求新旧版本签名一致。证书默认从 `~/.shotlate-signing/shotlate.p12` 读取（密码在同目录的 `p12-password.txt`，也可以用 `SIGNING_P12`、`SIGNING_P12_PASSWORD` 指定），通过临时钥匙串签名，不改动登录钥匙串。没有证书时退回 ad-hoc 签名，这样的构建每次都要重新授权，也收不到自动更新。
 
 ```bash
 ARCHS="arm64 x86_64" scripts/build-app.sh   # 通用二进制（Apple 芯片 + Intel）
@@ -44,8 +44,9 @@ scripts/make-dmg.sh 0.1.0                   # 打包成 build/Shotlate-0.1.0.dmg
 
 - 版本号：主、次版本取自 `Resources/Info.plist`，补丁号在上一个同系列标签上加一；要开始 0.2 系列，把 Info.plist 改成 `0.2.0`。
 - 提交信息里带 `[skip release]` 时只推送、不发布。
-- 默认 ad-hoc 签名，首次打开需要右键「打开」。在仓库 Secrets 里配置 `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`、`APPLE_ID`、`APPLE_TEAM_ID`、`APPLE_APP_PASSWORD` 后，改用 Developer ID 签名并公证。
-- 可选：同时上传到 Cloudflare R2。在仓库 Secrets 里加 `CLOUDFLARE_API_TOKEN`（需要「Workers R2 存储：编辑」权限）和 `CLOUDFLARE_ACCOUNT_ID`，在 Variables 里加 `R2_BUCKET`（存储桶名）后，每次发布会把 DMG 传成 `Shotlate-<版本>.dmg` 和固定名字的 `Shotlate-latest.dmg`。存储桶开启公开访问后，官网把下载地址设成 `https://<公开域名>/Shotlate-latest.dmg` 即可；没配置时这一步自动跳过，官网下载按钮跳到 GitHub 的最新发布页。
+- 签名：用自签证书，不经过 Apple 公证，首次打开需要右键「打开」。仓库 Secrets 需要 `MACOS_CERTIFICATE`（`shotlate.p12` 的 base64）、`MACOS_CERTIFICATE_PASSWORD` 和 `SPARKLE_ED_PRIVATE_KEY`（给 DMG 做 EdDSA 签名的私钥，公钥是 Info.plist 里的 `SUPublicEDKey`）。缺任何一个，发布都会失败，不会发出一个签名不对、用户收不到更新的版本。
+- 自动更新：每次发布都会带上 `appcast.xml`，已安装的 Shotlate 通过 `https://github.com/zuijiaosy/shotlate/releases/latest/download/appcast.xml` 发现新版本，由 [Sparkle](https://sparkle-project.org) 下载、校验签名并替换。证书和 EdDSA 私钥都要离线备份：丢了私钥，已安装的版本就再也收不到更新。
+- 可选：同时上传到 Cloudflare R2。在仓库 Secrets 里加 `CLOUDFLARE_API_TOKEN`（需要「Workers R2 存储：编辑」权限）和 `CLOUDFLARE_ACCOUNT_ID`，在 Variables 里加 `R2_BUCKET`（存储桶名）后，每次发布会把 DMG 传成 `Shotlate-<版本>.dmg` 和固定名字的 `Shotlate-latest.dmg`，再传一份 `appcast.xml`。再加上 Variable `R2_PUBLIC_URL`（存储桶的公开地址）后，自动更新也改从 R2 下载。存储桶开启公开访问后，官网把下载地址设成 `https://<公开域名>/Shotlate-latest.dmg` 即可；没配置时这一步自动跳过，官网下载按钮跳到 GitHub 的最新发布页。
 
 ## 使用
 
@@ -127,7 +128,7 @@ scripts/make-dmg.sh 0.1.0                   # 打包成 build/Shotlate-0.1.0.dmg
 
 - **快捷键**：截图、从剪贴板贴图、隐藏贴图和扫码的全局快捷键。
 - **保存**：保存位置和格式。
-- **通用**：登录时启动。
+- **通用**：登录时启动、自动检查更新。检查到新版本时不会弹窗打断截图，菜单栏菜单顶部会出现「有新版本 …」，点开后再决定是否安装；也可以随时点菜单里的「检查更新…」。
 
 ## 翻译设置
 
@@ -177,3 +178,10 @@ DEEPSEEK_API_KEY=sk-… .build/debug/Shotlate --translate-image input.png output
 ```
 
 同一个可执行文件第一次调用 Vision 识别时，系统要编译一次识别模型，可能需要几十秒；之后就很快。应用启动时会在后台预热一次。
+
+自动更新的端到端测试：用同一张证书构建两份测试副本（独立的 Bundle ID，不影响已安装的 Shotlate），在本机起一个 appcast，确认旧版能下载并装上新版，用另一把 EdDSA 私钥签名的版本会被拒绝。
+
+```bash
+scripts/build-app.sh && scripts/test-update.sh
+INSTALL_DIR=/Applications/ShotlateUpdateTest scripts/test-update.sh   # 装在「应用程序」下再测一次
+```

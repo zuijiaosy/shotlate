@@ -28,5 +28,15 @@
 	<true/>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Shotlate 需要屏幕录制权限来截取屏幕内容。</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/zuijiaosy/shotlate/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>RkEtvfkFSA2c5E/7aSKK3a8TgSGHQQcBdpE8IPBYvpg=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
 </dict>
 </plist>

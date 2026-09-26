@@ -5,17 +5,22 @@
 # counts up from the latest vX.Y.* tag. Bump Info.plist to 0.2.0 to start the 0.2 series.
 # Put "[skip release]" in a commit message to push without releasing.
 #
-# Signing: ad-hoc by default, which macOS Gatekeeper warns about on first launch. Add these repository
-# secrets to sign with a Developer ID and notarize instead:
-#   MACOS_CERTIFICATE           base64 of the "Developer ID Application" .p12
+# Signing: every release is signed with the shared self-signed "Shotlate Release" certificate (scripts/sign-app.sh),
+# which keeps the Screen Recording permission across updates, and its DMG with Sparkle's EdDSA key, which
+# is how installed copies tell a real update from anything else. Required repository secrets:
+#   MACOS_CERTIFICATE           base64 of shotlate.p12 (the self-signed certificate and its key)
 #   MACOS_CERTIFICATE_PASSWORD  password of that .p12
-#   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   for notarytool (app-specific password)
+#   SPARKLE_ED_PRIVATE_KEY      EdDSA private key; its public half is SUPublicEDKey in Resources/Info.plist
+# Each release also carries appcast.xml, which installed copies read from
+# https://github.com/zuijiaosy/shotlate/releases/latest/download/appcast.xml (SUFeedURL).
 #
 # Cloudflare R2 (optional): the DMG is also uploaded to an R2 bucket, as Shotlate-<version>.dmg and as
 # Shotlate-latest.dmg, which the website can link to. Skipped until both of these are set:
 #   secret   CLOUDFLARE_API_TOKEN    API token with "Workers R2 Storage: Edit"
 #   secret   CLOUDFLARE_ACCOUNT_ID   the Cloudflare account ID
 #   variable R2_BUCKET               bucket name (Settings → Secrets and variables → Actions → Variables)
+#   variable R2_PUBLIC_URL           optional, e.g. https://dl.example.com; when set, appcast.xml points
+#                                    downloads there instead of at the GitHub release
 name: Release
 
 on:
@@ -35,10 +40,10 @@ jobs:
     if: ${{ !contains(github.event.head_commit.message, '[skip release]') }}
     runs-on: macos-26
     env:
-      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_BUCKET: ${{ vars.R2_BUCKET }}
+      R2_PUBLIC_URL: ${{ vars.R2_PUBLIC_URL }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -63,71 +68,65 @@ jobs:
           echo "previous=$previous" >> "$GITHUB_OUTPUT"
           echo "Releasing $version (previous: ${previous:-none})"
 
-      - name: Import signing certificate
-        if: env.MACOS_CERTIFICATE != ''
+      - name: Signing certificate
         env:
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
         run: |
-          keychain="$RUNNER_TEMP/signing.keychain-db"
-          password="$(uuidgen)"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
-          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
-          identity="$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
-          echo "SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          # An unsigned release would cost every user their Screen Recording permission, so don't ship one.
+          if [ -z "$MACOS_CERTIFICATE" ]; then
+            echo "::error::Secret MACOS_CERTIFICATE is missing; see the comment at the top of this file"
+            exit 1
+          fi
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/shotlate.p12"
+          echo "SIGNING_P12=$RUNNER_TEMP/shotlate.p12" >> "$GITHUB_ENV"
 
       - name: Build
         env:
           VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ github.run_number }}
           ARCHS: arm64 x86_64
+          SIGNING_P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
         run: |
           scripts/build-app.sh
           lipo -archs build/Shotlate.app/Contents/MacOS/Shotlate
+          codesign -dvv build/Shotlate.app 2>&1 | grep -q '^Authority=Shotlate Release$' \
+            || { echo "::error::Shotlate.app is not signed with the Shotlate Release certificate"; exit 1; }
 
       - name: Package DMG
         run: scripts/make-dmg.sh "${{ steps.version.outputs.version }}"
 
-      - name: Notarize
-        if: env.MACOS_CERTIFICATE != ''
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          dmg="build/Shotlate-${{ steps.version.outputs.version }}.dmg"
-          xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
-          xcrun stapler staple "$dmg"
-
       - name: Write release notes
         run: |
+          scripts/release-notes.sh "${{ steps.version.outputs.previous }}" > "$RUNNER_TEMP/changes.md"
           {
-            scripts/release-notes.sh "${{ steps.version.outputs.previous }}"
+            cat "$RUNNER_TEMP/changes.md"
             echo "### 安装"
             echo
-            echo "下载 \`Shotlate-${{ steps.version.outputs.version }}.dmg\`，打开后把 Shotlate 拖进「应用程序」。支持 macOS 14 及以上，Apple 芯片和 Intel 通用。"
-            if [ -z "$MACOS_CERTIFICATE" ]; then
-              echo
-              echo "这个版本没有经过 Apple 公证，首次打开时请在「应用程序」里右键 Shotlate →「打开」；如果提示「已损坏」，在终端运行 \`xattr -dr com.apple.quarantine /Applications/Shotlate.app\`。更新后可能需要重新授予屏幕录制权限。"
-            fi
+            echo "下载 \`Shotlate-${{ steps.version.outputs.version }}.dmg\`，打开后把 Shotlate 拖进「应用程序」。支持 macOS 14 及以上，Apple 芯片和 Intel 通用。已经装了带自动更新的版本的，会在菜单栏菜单里收到更新提示，不用再手动下载。"
+            echo
+            echo "Shotlate 没有经过 Apple 公证，首次打开时请在「应用程序」里右键 Shotlate →「打开」；如果提示「已损坏」，在终端运行 \`xattr -dr com.apple.quarantine /Applications/Shotlate.app\`。"
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md"
 
-      - name: Publish release
+      - name: Sign update and write appcast
         env:
-          GH_TOKEN: ${{ github.token }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+            echo "::error::Secret SPARKLE_ED_PRIVATE_KEY is missing; see the comment at the top of this file"
+            exit 1
+          fi
           version="${{ steps.version.outputs.version }}"
-          gh release create "v$version" "build/Shotlate-$version.dmg" \
-            --target "$GITHUB_SHA" \
-            --title "Shotlate $version" \
-            --notes-file "$RUNNER_TEMP/notes.md"
+          if [ -n "$R2_PUBLIC_URL" ] && [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$R2_BUCKET" ]; then
+            url="${R2_PUBLIC_URL%/}/Shotlate-$version.dmg"
+          else
+            url="https://github.com/${{ github.repository }}/releases/download/v$version/Shotlate-$version.dmg"
+          fi
+          scripts/make-appcast.sh "$version" "${{ github.run_number }}" "build/Shotlate-$version.dmg" "$url" \
+            "$RUNNER_TEMP/changes.md" > build/appcast.xml
+          cat build/appcast.xml
 
-      - name: Upload to Cloudflare R2
+      - name: Upload DMG to Cloudflare R2
         if: env.CLOUDFLARE_API_TOKEN != '' && env.R2_BUCKET != ''
         run: |
           version="${{ steps.version.outputs.version }}"
@@ -137,3 +136,21 @@ jobs:
           # A fixed name for "download the latest"; not cached, so a new release shows up right away.
           npx --yes wrangler@4 r2 object put "$R2_BUCKET/Shotlate-latest.dmg" --file "$dmg" \
             --content-type application/x-apple-diskimage --cache-control "no-cache" --remote
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          # appcast.xml goes up with the DMG; installed copies find it through releases/latest.
+          gh release create "v$version" "build/Shotlate-$version.dmg" build/appcast.xml \
+            --target "$GITHUB_SHA" \
+            --title "Shotlate $version" \
+            --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Upload appcast to Cloudflare R2
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.R2_BUCKET != ''
+        run: |
+          # Last, so it never points at a DMG that isn't there yet.
+          npx --yes wrangler@4 r2 object put "$R2_BUCKET/appcast.xml" --file build/appcast.xml \
+            --content-type application/xml --cache-control "no-cache" --remote

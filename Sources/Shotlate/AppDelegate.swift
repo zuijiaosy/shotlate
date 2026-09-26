@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var togglePinsItem: NSMenuItem!
     private var cancelDelayItem: NSMenuItem!
     private var scanItem: NSMenuItem!
+    private var updateReadyItem: NSMenuItem!
+    private var checkUpdatesItem: NSMenuItem!
     private let countdown = Countdown()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -21,6 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let menu = NSMenu()
         menu.delegate = self
+        updateReadyItem = item("", #selector(checkForUpdates))
+        updateReadyItem.isHidden = true
+        menu.addItem(updateReadyItem)
         captureItem = item("截图", #selector(capture))
         menu.addItem(captureItem)
         let delayItem = NSMenuItem(title: "延时截图", action: nil, keyEquivalent: "")
@@ -46,6 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(item("设置…", #selector(openSettings), ","))
         menu.addItem(.separator())
+        checkUpdatesItem = item("检查更新…", #selector(checkForUpdates))
+        checkUpdatesItem.isHidden = !Updater.isAvailable
+        menu.addItem(checkUpdatesItem)
         menu.addItem(NSMenuItem(title: "退出 Shotlate", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
 
@@ -56,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         center.addObserver(forName: .resumeHotKeys, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
 
         TextRecognizer.warmUp()
+        Updater.shared.start()
 
         if !CaptureEngine.hasPermission {
             CGRequestScreenCaptureAccess()
@@ -102,7 +111,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         togglePinsItem.isEnabled = pins.hasPins
         togglePinsItem.title = (pins.isHidingAll ? "显示全部贴图" : "隐藏全部贴图") + togglePinsShortcutLabel
         cancelDelayItem.isHidden = !countdown.isRunning
+        let pending = Updater.shared.pendingVersion
+        updateReadyItem.isHidden = pending == nil
+        updateReadyItem.title = "有新版本 \(pending ?? "")…"
     }
+
+    @objc private func checkForUpdates() { Updater.shared.checkForUpdates() }
 
     @objc private func capture() {
         // Let the menu close before the screen is frozen.

@@ -31,9 +31,10 @@ scripts/test.sh --filter StitcherTests        # 只跑一个测试组或测试
 .build/debug/Shotlate --ui-demo bg.png out/   # 离屏驱动截图界面，每一步输出一张 PNG
 .build/debug/Shotlate --translate-image in.png out.png --scale 2   # 不开界面检查 OCR 和译文排版（没 Key 用占位译文）
 .build/debug/Shotlate --scroll-demo long.png  # 长截图端到端（需要终端有屏幕录制权限）
-scripts/build-app.sh                          # 生成 build/Shotlate.app，有 Apple Development 证书时自动签名
+scripts/build-app.sh                          # 生成 build/Shotlate.app，嵌入 Sparkle，用统一的自签证书签名（scripts/sign-app.sh）
 ARCHS="arm64 x86_64" scripts/build-app.sh     # 通用二进制
 scripts/make-dmg.sh 0.1.9                     # build/Shotlate-0.1.9.dmg
+scripts/test-update.sh                        # 自动更新端到端测试：100→101 能装上，另一把私钥签的 102 被拒（先 build-app）
 ```
 
 改完代码的标准验证：`swift build` 没有警告 → `scripts/test.sh` → `.build/debug/Shotlate --check all`。改了界面时，看一眼 `--check` 输出目录里的 PNG（比如 `toolbar-hover.png`、`settings-*.png`、`ocr.png`）。
@@ -68,15 +69,20 @@ docs/images/            README 用的动图和截图
 - **Pin.swift**：`PinManager`（全部贴图、隐藏 / 显示）、`PinWindow`（缩放、透明度、翻译、复制保存）、`PinView`（拖动、文字选择、右键菜单）。
 - **Settings.swift**：设置都在 UserDefaults（域 `app.shotlate.Shotlate`）；翻译 API Key 存 `~/Library/Application Support/Shotlate/api-key`（权限 600，**不用钥匙串**，因为每次重新签名都会弹密码框）。未打包运行（`.build/debug/Shotlate`）时 Key 只读环境变量 `DEEPSEEK_API_KEY`，从不碰真实配置。
 - **SettingsWindow.swift**：`SettingsModel` 的每个属性 `didSet` 立即写入 Settings；改全局快捷键会发 `Settings.didChange`，AppDelegate 重新注册（HotKey.swift，Carbon，不需要辅助功能权限）。
+- **Updater.swift**：包一层 Sparkle 的 `SPUStandardUpdaterController`。菜单栏应用没有 Dock 图标，所以开了“温和提醒”：定时检查发现新版时不弹窗，只让 AppDelegate 在菜单顶部显示「有新版本 …」，点了才弹 Sparkle 的窗口。只在打包的 .app 里启动；`.build/debug` 和自检不碰 Sparkle。Sparkle 的配置在 Info.plist 的 `SU*` 键里。
 - **FeatureChecks.swift + CaptureHarness.swift**：离屏窗口加模拟事件的自检。未打包运行时，开始前会清空本进程的 UserDefaults 域，保证互不影响。新增交互功能时在这里加对应的检查，也就是用户说的“自检”。
 
 ## 发布与仓库
 
 - GitHub：`zuijiaosy/shotlate`。本地分支 `master` 跟踪 `origin/main`，推送用 `git push origin HEAD:main`。
-- **推送到 `main` 会自动发版**（`.github/workflows/release.yml`）：跑测试 → 构建通用版 → DMG → GitHub Release。版本号的主、次版本取自 Info.plist，补丁号在上一个同系列标签上加一。只改文档的提交在信息里写 `[skip release]`。**提交和推送都要等用户明确要求**。
+- **推送到 `main` 会自动发版**（`.github/workflows/release.yml`）：跑测试 → 构建通用版并用统一证书签名 → DMG → EdDSA 签名、生成 appcast.xml → GitHub Release（DMG + appcast.xml）。版本号的主、次版本取自 Info.plist，补丁号在上一个同系列标签上加一。只改文档的提交在信息里写 `[skip release]`。**提交和推送都要等用户明确要求**。
 - 提交信息用中文 conventional commits（`feat:` / `fix:` / `docs:` …）；正文里的 `- ` 列表会被 `scripts/release-notes.sh` 收进发布说明，写成给用户看的变化；结尾加 `Co-Authored-By: Claude <noreply@anthropic.com>`。
-- 可选上传到 Cloudflare R2：仓库配好 Secrets `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID` 和 Variable `R2_BUCKET` 后，每次发布同时上传 `Shotlate-<版本>.dmg` 和 `Shotlate-latest.dmg`；没配时自动跳过（目前没配）。
-- 默认 ad-hoc 签名；屏幕录制权限和签名、Bundle ID 绑定，改 Bundle ID 或签名后需要重新授权。
+- 可选上传到 Cloudflare R2：仓库配好 Secrets `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID` 和 Variable `R2_BUCKET` 后，每次发布同时上传 `Shotlate-<版本>.dmg`、`Shotlate-latest.dmg` 和 `appcast.xml`（最后传）；再配 Variable `R2_PUBLIC_URL` 后 appcast 里的下载地址改指 R2。没配时自动跳过（目前没配）。
+- **签名统一，两把钥匙**（不用 Apple 证书，项目开源、不打算付年费）：
+  - 自签证书「Shotlate Release」：本机和 CI 的每个构建都用它签（`scripts/sign-app.sh`，临时钥匙串，不动登录钥匙串）。屏幕录制权限绑定的是“Bundle ID + 证书”，证书不换，更新后权限就还在。本机文件在 `~/.shotlate-signing/`（`shotlate.p12`、`p12-password.txt`），CI 里是 Secrets `MACOS_CERTIFICATE`、`MACOS_CERTIFICATE_PASSWORD`。
+  - Sparkle 的 EdDSA 私钥：给 DMG 签名（`scripts/make-appcast.sh`），公钥是 Info.plist 的 `SUPublicEDKey`。本机在 `~/.shotlate-signing/sparkle_ed25519_private.txt`，CI 里是 Secret `SPARKLE_ED_PRIVATE_KEY`。**这是 Sparkle 认包唯一的硬条件**：实测 EdDSA 签名对、代码签名换成 ad-hoc 的包，Sparkle 照样会装，只是装完权限丢了。所以 release.yml 会检查 .app 确实是 Shotlate Release 签的，缺 Secret 直接失败。
+  - 两样都不能丢也不能换：丢了私钥，已安装的版本再也收不到更新；换了证书，所有用户要重新授权一次。
+- 自动更新：每次发布把 `appcast.xml` 作为附件传到 Release，客户端读 `releases/latest/download/appcast.xml`；Sparkle 比较的是 `CFBundleVersion`（CI 里是 `github.run_number`）。本机构建的构建号是 1，所以本机装的版本总会提示更新到 CI 的最新版。
 
 ## 官网
 
@@ -94,4 +100,6 @@ docs/images/            README 用的动图和截图
 - `--scroll-demo` 拍的是屏幕上的真实区域：演示窗口没在最前面时，会拍到用户屏幕上的其他内容。生成的图一定要先看一眼，不要直接发布（素材脚本已经会拒绝没拼接成功的结果）。
 - `ToolbarKeys` 和其他 UserDefaults 状态在打包的 App 和 `.build/debug` 之间不共享（域不同）；离屏演示用打包的 App 跑时，会带上用户本机的样式偏好。
 - 快捷键卡片、样式条、OCR 面板都是 CaptureView 的子视图，位置在 `layoutChrome()` 里统一计算；选区下方放不下时工具栏会竖排，改布局后跑 `--check toolbar-placement`。
+- 从 ad-hoc 或 Apple Development 签名的旧版本换到统一证书签名的版本时，屏幕录制要重新授权一次；0.1.4 及更早的版本没有 Sparkle，要手动下载一次新版。
+- `scripts/test-update.sh` 会启动两份测试副本（Bundle ID `app.shotlate.UpdateTest`），它们启动时会弹屏幕录制授权框，忽略即可。`INSTALL_DIR` 指向已有的真实 Shotlate.app 时脚本会拒绝运行。
 - 在 macOS 上，这台机器 shell 里的 `grep` 有别名，输出可能被吞；检查构建产物时可以用 `/usr/bin/grep` 或 Python。

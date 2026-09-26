@@ -22,6 +22,7 @@ final class SettingsModel: ObservableObject {
     @Published var recording: ShortcutTarget?
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled { didSet { applyLaunchAtLogin() } }
     @Published var loginItemError: String?
+    @Published var automaticallyChecksForUpdates = Updater.shared.automaticallyChecks { didSet { Updater.shared.automaticallyChecks = automaticallyChecksForUpdates } }
     @Published var testResult: String?
     @Published var isTesting = false
 
@@ -267,12 +268,19 @@ struct SettingsView: View {
         }
     }
 
-    private var general: some View {
+    @ViewBuilder private var general: some View {
         Section {
             Toggle("登录时启动 Shotlate", isOn: $model.launchAtLogin)
             if let error = model.loginItemError {
                 Text(error).font(.callout).foregroundStyle(.red)
             }
+        }
+        Section {
+            Toggle("自动检查更新", isOn: $model.automaticallyChecksForUpdates)
+        } footer: {
+            Text("当前版本 \(Updater.versionString)。每天检查一次，有新版本时菜单里会出现提示，由你决定何时安装。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

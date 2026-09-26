@@ -36,6 +36,7 @@ enum FeatureChecks {
         ("toolbar-keys", toolbarKeys),
         ("ocr", ocr),
         ("secret-file", secretFile),
+        ("updater", updater),
     ]
 
     @MainActor
@@ -697,5 +698,17 @@ enum FeatureChecks {
         key(pin, "\u{1b}", code: 53)
         expect(!pin.isVisible, "Esc then closes the pin")
         PinManager.shared.closeAll()
+    }
+
+    /// Unbundled runs never start Sparkle; the settings switch still lands where Sparkle reads it.
+    @MainActor static func updater() async {
+        expect(!Updater.isAvailable, "an unbundled build does not start the updater")
+        expect(Updater.versionString == "开发版", "an unbundled build calls itself 开发版 instead of a version")
+        let model = SettingsModel(loadSecrets: false)
+        expect(model.automaticallyChecksForUpdates, "automatic update checks are on by default")
+        model.automaticallyChecksForUpdates = false
+        expect(UserDefaults.standard.object(forKey: "SUEnableAutomaticChecks") as? Bool == false, "turning them off is saved at once, under Sparkle's key")
+        model.automaticallyChecksForUpdates = true
+        expect(Updater.shared.automaticallyChecks, "and turning them back on too")
     }
 }
