@@ -302,6 +302,35 @@ import Testing
         #expect(stitcher.height == 100)
     }
 
+    @Test func resumesAfterLosingTrack() {
+        // A fling jumps past the visible band; frames only match again once the user scrolls back
+        // to where the last stitched frame overlaps, and stitching then carries on seamlessly.
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(Self.frame(scroll: 0))
+        #expect(stitcher.add(Self.frame(scroll: 150)) == .noOverlap)
+        #expect(stitcher.add(Self.frame(scroll: 170)) == .noOverlap)
+        #expect(stitcher.add(Self.frame(scroll: 60)) == .appended(60))
+        #expect(stitcher.add(Self.frame(scroll: 100)) == .appended(40))
+        #expect(stitcher.height == 10 + (100 + 92 - 10) + 8)
+        for y in 10..<(100 + 92) { #expect(stitcher.row(y) == Self.contentRow(y), "row \(y)") }
+    }
+
+    @Test func scrollHintPicksOffsetInRepeatingContent() {
+        // Content that repeats every 20 rows matches at several offsets; the scroll hint picks the real one.
+        func periodic(_ scroll: Int) -> PixelBuffer {
+            var data = [UInt8]()
+            for y in 0..<100 { data += y < 10 ? Self.solidRow(16) : Self.contentRow((scroll + y) % 20) }
+            return PixelBuffer(width: Self.width, height: 100, bytesPerRow: Self.width * 4, data: data)
+        }
+        let hinted = ScrollStitcher()
+        _ = hinted.add(periodic(0))
+        #expect(hinted.add(periodic(30), expectedOffset: 28) == .appended(30))
+
+        let unhinted = ScrollStitcher()
+        _ = unhinted.add(periodic(0))
+        #expect(unhinted.add(periodic(30)) != .appended(30))
+    }
+
     @Test func stopsAtHeightLimit() {
         let stitcher = ScrollStitcher(maxHeight: 120)
         _ = stitcher.add(Self.frame(scroll: 0))
@@ -309,21 +338,123 @@ import Testing
     }
 
     @Test func ignoresChangingScrollBarColumns() {
-        // Same content, but the right-most 4 columns differ between frames like a moving scroll bar knob.
-        func withKnob(_ frame: PixelBuffer, _ v: UInt8) -> PixelBuffer {
+        // Same content, but 8 columns at both edges differ between frames like overlay scroll bar knobs.
+        func withKnobs(_ frame: PixelBuffer, _ v: UInt8) -> PixelBuffer {
             var data = frame.data
             for y in 0..<frame.height {
-                for x in (Self.width - 8)..<Self.width { data[(y * Self.width + x) * 4 ..< (y * Self.width + x) * 4 + 3] = [v, v, v] }
+                for x in Array(0..<8) + Array((Self.width - 8)..<Self.width) {
+                    data[(y * Self.width + x) * 4 ..< (y * Self.width + x) * 4 + 3] = [v, v, v]
+                }
             }
             return PixelBuffer(width: frame.width, height: frame.height, bytesPerRow: frame.bytesPerRow, data: data)
         }
-        let strict = ScrollStitcher()
-        _ = strict.add(withKnob(Self.frame(scroll: 0, header: false), 0))
-        #expect(strict.add(withKnob(Self.frame(scroll: 30, header: false), 128)) == .noOverlap)
+        let stitcher = ScrollStitcher(ignoredSideColumns: 8)
+        _ = stitcher.add(withKnobs(Self.frame(scroll: 0, header: false), 0))
+        #expect(stitcher.add(withKnobs(Self.frame(scroll: 30, header: false), 255)) == .appended(30))
+    }
 
-        let tolerant = ScrollStitcher(ignoredRightColumns: 8)
-        _ = tolerant.add(withKnob(Self.frame(scroll: 0, header: false), 0))
-        #expect(tolerant.add(withKnob(Self.frame(scroll: 30, header: false), 128)) == .appended(30))
+    /// A frame with a `footer`-row toolbar at the bottom that never moves.
+    static func footered(scroll: Int, footer: Int, caret: Bool = false) -> PixelBuffer {
+        var data = [UInt8]()
+        for y in 0..<100 {
+            if y >= 100 - footer {
+                var row = solidRow(y % 3 == 0 ? 90 : 180)
+                // A caret a few pixels wide in the input box, blinking between frames.
+                if caret, y >= 100 - footer + 4, y < 100 - footer + 16 {
+                    for x in 40..<42 { row.replaceSubrange(x * 4 ..< x * 4 + 3, with: scroll % 2 == 0 ? [0, 0, 0] : [255, 255, 255]) }
+                }
+                data += row
+            } else {
+                data += contentRow(scroll + y)
+            }
+        }
+        return PixelBuffer(width: width, height: 100, bytesPerRow: width * 4, data: data)
+    }
+
+    @Test func tallFooterAppearsOnlyAtTheBottom() {
+        let stitcher = ScrollStitcher()
+        for scroll in [0, 12, 30, 51, 70, 90] { _ = stitcher.add(Self.footered(scroll: scroll, footer: 30)) }
+        #expect(stitcher.height == 90 + 100)
+        for y in 0..<(90 + 70) { #expect(stitcher.row(y) == Self.contentRow(y), "row \(y)") }
+        #expect(stitcher.row(stitcher.height - 1) == Self.footered(scroll: 90, footer: 30).data.suffix(Self.width * 4).map { $0 })
+    }
+
+    @Test func blinkingCaretInFooterIsNotContent() {
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(Self.footered(scroll: 0, footer: 30, caret: true))
+        #expect(stitcher.add(Self.footered(scroll: 1, footer: 30, caret: true)) == .appended(1))
+        #expect(stitcher.add(Self.footered(scroll: 1, footer: 30, caret: false)) == .unchanged)
+        #expect(stitcher.add(Self.footered(scroll: 25, footer: 30, caret: true)) == .appended(24))
+        for y in 0..<(25 + 70) { #expect(stitcher.row(y) == Self.contentRow(y), "row \(y)") }
+    }
+
+    /// Content made of soft horizontal stripes sampled at fractional scroll positions, like a browser
+    /// scrolling by half pixels and re-rendering: no two frames share exact rows.
+    static func smooth(scroll: Double) -> PixelBuffer {
+        var data = [UInt8]()
+        for y in 0..<100 {
+            let v = scroll + Double(y)
+            for x in 0..<width {
+                let a = 128 + 60 * sin(v * 0.21 + Double(x) * 0.13) + 50 * sin(v * 0.037 * Double(x % 7 + 1))
+                data += [UInt8(max(0, min(255, a))), UInt8(max(0, min(255, 255 - a))), 128, 255]
+            }
+        }
+        return PixelBuffer(width: width, height: 100, bytesPerRow: width * 4, data: data)
+    }
+
+    @Test func followsFractionalScrolling() {
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(Self.smooth(scroll: 0))
+        var total = 0
+        for scroll in [7.5, 19.25, 33.5, 50.0] {
+            guard case .appended(let d) = stitcher.add(Self.smooth(scroll: scroll)) else {
+                Issue.record("frame at \(scroll) did not stitch")
+                return
+            }
+            total += d
+            #expect(abs(Double(total) - scroll) <= 1)
+        }
+    }
+
+    @Test func lowTextureContentStillStitches() {
+        // Mostly blank rows with a line of detail every 15 rows.
+        func sparse(_ scroll: Int) -> PixelBuffer {
+            var data = [UInt8]()
+            for y in 0..<100 { data += (scroll + y) % 15 == 0 ? Self.contentRow(scroll + y) : Self.solidRow(250) }
+            return PixelBuffer(width: Self.width, height: 100, bytesPerRow: Self.width * 4, data: data)
+        }
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(sparse(0))
+        #expect(stitcher.add(sparse(20)) == .appended(20))
+        #expect(stitcher.add(sparse(47)) == .appended(27))
+    }
+
+    @Test func rubberBandAtTheEndLeavesNoGap() {
+        // At the end of the page the content overshoots, showing blank rows above the footer, then bounces back.
+        func overscrolled(_ by: Int) -> PixelBuffer {
+            var data = [UInt8]()
+            for y in 0..<100 {
+                if y < 10 { data += Self.solidRow(y % 2 == 0 ? 16 : 32) } else if y >= 92 { data += Self.solidRow(y % 2 == 0 ? 200 : 224) }
+                else { data += y >= 92 - by ? Self.solidRow(255) : Self.contentRow(60 + y + by) }
+            }
+            return PixelBuffer(width: Self.width, height: 100, bytesPerRow: Self.width * 4, data: data)
+        }
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(Self.frame(scroll: 0))
+        _ = stitcher.add(Self.frame(scroll: 30))
+        _ = stitcher.add(Self.frame(scroll: 60))
+        #expect(stitcher.add(overscrolled(6)) == .appended(6))
+        #expect(stitcher.add(Self.frame(scroll: 60)) == .scrolledBack)
+        #expect(stitcher.height == 10 + (60 + 82) + 8)
+        for y in 10..<(60 + 92) { #expect(stitcher.row(y) == Self.contentRow(y), "row \(y)") }
+    }
+
+    @Test func previewShowsTheNewestRows() {
+        let stitcher = ScrollStitcher()
+        for scroll in stride(from: 0, through: 300, by: 30) { _ = stitcher.add(Self.frame(scroll: scroll)) }
+        let preview = stitcher.makePreview(targetWidth: 96, maxHeight: 50)
+        #expect(preview?.height == 50)
+        #expect(preview?.width == 96)
     }
 }
 

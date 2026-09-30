@@ -35,15 +35,18 @@ enum DevTools {
                 return PixelBuffer(image: image)
             }
             if let a = load(args[2]), let b = load(args[3]) {
-                print(ScrollStitcher(ignoredRightColumns: 36).diagnose(a, b))
+                print(ScrollStitcher(ignoredSideColumns: 32).diagnose(a, b))
             }
             exit(0)
+        }
+        if args.count >= 3, args[1] == "--stitch-replay" {
+            exit(replayStitch(directory: URL(fileURLWithPath: args[2]), output: args.count >= 4 ? URL(fileURLWithPath: args[3]) : nil))
         }
         if args.count >= 3, args[1] == "--scroll-demo" {
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)
             Task { @MainActor in
-                ScrollDemo.run(output: URL(fileURLWithPath: args[2]))
+                ScrollDemo.run(output: URL(fileURLWithPath: args[2]), auto: args.contains("--auto"))
             }
             app.run()
         }
@@ -57,6 +60,35 @@ enum DevTools {
             FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8))
             exit(1)
         }
+    }
+
+    /// Feeds frames saved by a long-screenshot session (`frame0001.png`, …) to the stitcher in order,
+    /// printing how each one was handled, and writes the stitched image.
+    ///
+    ///   Shotlate --stitch-replay ~/Library/Logs/Shotlate/scroll-<time> [output.png]
+    static func replayStitch(directory: URL, output: URL?) -> Int32 {
+        let files = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+            .filter { $0.hasPrefix("frame") && $0.hasSuffix(".png") }.sorted()
+        guard !files.isEmpty else {
+            print("no frame*.png in \(directory.path)")
+            return 1
+        }
+        let stitcher = ScrollStitcher(maxHeight: 60_000, ignoredSideColumns: 32)
+        var failures = 0
+        for file in files {
+            guard let source = CGImageSourceCreateWithURL(directory.appendingPathComponent(file) as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil), let frame = PixelBuffer(image: image) else { continue }
+            let began = Date()
+            let result = stitcher.add(frame)
+            if result == .noOverlap { failures += 1 }
+            print(file, result, "height", stitcher.height, String(format: "%.1f ms", Date().timeIntervalSince(began) * 1000), "|", stitcher.lastDiagnostics)
+        }
+        print("frames \(files.count), lost \(failures), height \(stitcher.height)")
+        if let output, let image = stitcher.makeImage() {
+            try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: output)
+            print("→ \(output.path)")
+        }
+        return 0
     }
 
     private static func wait<T>(_ operation: @escaping () async throws -> T) throws -> T {
