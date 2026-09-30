@@ -521,3 +521,121 @@ import Testing
         #expect(layout.text(for: whole) == "直接选择文字")
     }
 }
+
+@Suite struct FreeTranslatorTests {
+    func item(_ id: Int, _ n: Int) -> ChatTranslator.Item { .init(id: id, text: String(repeating: "a", count: n)) }
+
+    @Test func batchesStayUnderLimitAndKeepOrder() {
+        let items = (0..<5).map { item($0, 1500) }
+        let batches = FreeTranslator.batches(items)
+        #expect(batches.map { $0.map(\.id) } == [[0, 1], [2, 3], [4]])
+    }
+
+    @Test func batchAtExactLimitStaysTogether() {
+        #expect(FreeTranslator.batches([item(0, 2000), item(1, 2000)]).count == 1)
+        #expect(FreeTranslator.batches([item(0, 2000), item(1, 2001)]).count == 2)
+    }
+
+    @Test func overlongItemIsSplitWithoutLosingText() {
+        let batches = FreeTranslator.batches([item(0, 10), item(1, 9000), item(2, 10)])
+        #expect(batches.map { $0.map(\.id) } == [[0], [1], [1], [1, 2]])
+        #expect(batches.allSatisfy { $0.reduce(0) { $0 + $1.text.utf16.count } <= 4000 })
+        #expect(batches.flatMap { $0 }.filter { $0.id == 1 }.map(\.text).joined() == item(1, 9000).text)
+    }
+
+    @Test func unicodeChunksStayWithinServiceLimit() {
+        let text = String(repeating: "中😀e\u{301}", count: 2000)
+        let chunks = FreeTranslator.batches([.init(id: 42, text: text)]).flatMap { $0 }
+        #expect(chunks.allSatisfy { $0.text.utf16.count <= 4000 && $0.id == 42 })
+        #expect(chunks.map(\.text).joined() == text)
+    }
+
+    @Test func translatesAndReassemblesLongParagraphs() async throws {
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [FreeTranslationProtocol.self]
+        let session = URLSession(configuration: sessionConfig)
+        defer { session.invalidateAndCancel() }
+        let config = TranslationConfig(baseURL: "", model: "", apiKey: "", targetLanguage: "English", engine: .free)
+        let long = String(repeating: "a", count: 4000) + String(repeating: "b", count: 4000) + String(repeating: "c", count: 1000)
+        let result = try await Translator.translate([
+            .init(id: 7, text: "before"), .init(id: 42, text: long), .init(id: 9, text: "after"),
+        ], config: config, session: session)
+        #expect(result == [7: "BEFORE", 42: long.uppercased(), 9: "AFTER"])
+    }
+
+    @Test func buildsRequest() throws {
+        let config = TranslationConfig(baseURL: "", model: "", apiKey: "", targetLanguage: "日本語", engine: .free, clientKey: "k1")
+        let request = try FreeTranslator.makeRequest(texts: ["Settings", "Open"], config: config)
+        let data = try #require(request.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(request.httpMethod == "POST")
+        #expect((body["header"] as? [String: Any])?["client_key"] as? String == "k1")
+        #expect((body["target"] as? [String: Any])?["lang"] as? String == "ja")
+        let source = try #require(body["source"] as? [String: Any])
+        #expect(source["lang"] as? String == "auto")
+        #expect(source["text_list"] as? [String] == ["Settings", "Open"])
+    }
+
+    @Test func mapsEveryLanguage() {
+        #expect(["简体中文", "繁體中文", "English", "日本語", "한국어"].map(FreeTranslator.languageCode) == ["zh", "zh-TW", "en", "ja", "ko"])
+    }
+
+    @Test func parsesResponse() throws {
+        let ok = #"{"header":{"ret_code":"succ"},"auto_translation":["设置","打开"]}"#
+        #expect(try FreeTranslator.parseResponse(Data(ok.utf8), expected: 2) == ["设置", "打开"])
+        #expect(throws: TranslationError.badResponse("译文数量与原文不一致")) {
+            try FreeTranslator.parseResponse(Data(ok.utf8), expected: 3)
+        }
+        let limit = #"{"header":{"ret_code":"outOfLimit"}}"#
+        #expect(throws: TranslationError.service("outOfLimit")) {
+            try FreeTranslator.parseResponse(Data(limit.utf8), expected: 1)
+        }
+    }
+
+    @Test func cacheKeyIgnoresModelForFreeEngine() {
+        var a = TranslationConfig(baseURL: "", model: "m1", apiKey: "", targetLanguage: "English", engine: .free)
+        var b = a
+        b.model = "m2"
+        #expect(TranslationCache.key("x", a) == TranslationCache.key("x", b))
+        a.engine = .llm
+        #expect(TranslationCache.key("x", a) != TranslationCache.key("x", b))
+    }
+}
+
+private final class FreeTranslationProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        do {
+            var data = request.httpBody ?? Data()
+            if let stream = request.httpBodyStream {
+                stream.open()
+                defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while true {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count < 0 { throw stream.streamError ?? URLError(.cannotDecodeContentData) }
+                    if count == 0 { break }
+                    data.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let source = try #require(body["source"] as? [String: Any])
+            let texts = try #require(source["text_list"] as? [String])
+            let withinLimit = texts.reduce(0) { $0 + $1.utf16.count } <= 4000
+            let responseBody: [String: Any] = [
+                "header": ["ret_code": withinLimit ? "succ" : "outOfLimit"],
+                "auto_translation": texts.map { $0.uppercased() },
+            ]
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: try JSONSerialization.data(withJSONObject: responseBody))
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}

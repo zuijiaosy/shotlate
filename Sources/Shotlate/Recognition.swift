@@ -212,7 +212,7 @@ enum ImageTranslator {
             translations = try await send(items)
         } else {
             let config = Settings.shared.translationConfig
-            translations = try await TranslationService.cache.translate(items, config: config) { try await ChatTranslator.translate($0, config: config) }
+            translations = try await TranslationService.cache.translate(items, config: config) { try await Translator.translate($0, config: config) }
         }
         let laidOut = TranslationLayout.layout(blocks: blocks, translations: translations, crop: cg, selection: bounds)
         let base = NSImage(cgImage: cg, size: rep.size)

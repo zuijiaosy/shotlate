@@ -70,6 +70,23 @@ final class Settings {
 
     private let defaults = UserDefaults.standard
 
+    /// Existing users who already set up an API key keep the LLM; everyone else starts on the free engine.
+    var engine: TranslationEngine {
+        get {
+            if let raw = defaults.string(forKey: "translate.engine"), let engine = TranslationEngine(rawValue: raw) { return engine }
+            return apiKey.isEmpty ? .free : .llm
+        }
+        set { defaults.set(newValue.rawValue, forKey: "translate.engine") }
+    }
+
+    /// Per-install id sent to the free translation service.
+    var clientKey: String {
+        if let key = defaults.string(forKey: "translate.clientKey") { return key }
+        let key = "browser-chrome-110.0.0-Mac OS-\(UUID().uuidString.lowercased())-\(Int(Date().timeIntervalSince1970 * 1000))"
+        defaults.set(key, forKey: "translate.clientKey")
+        return key
+    }
+
     var baseURL: String {
         get { defaults.string(forKey: "translate.baseURL") ?? TranslationConfig.defaultBaseURL }
         set { defaults.set(newValue, forKey: "translate.baseURL") }
@@ -152,7 +169,8 @@ final class Settings {
     }
 
     var translationConfig: TranslationConfig {
-        TranslationConfig(baseURL: baseURL, model: model, apiKey: apiKey, targetLanguage: targetLanguage)
+        TranslationConfig(baseURL: baseURL, model: model, apiKey: apiKey, targetLanguage: targetLanguage,
+                          engine: engine, clientKey: clientKey)
     }
 }
 

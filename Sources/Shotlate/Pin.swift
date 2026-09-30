@@ -295,8 +295,8 @@ final class PinWindow: NSPanel {
             return
         }
         guard !isTranslating else { return }
-        // Only the real translator needs the key.
-        if translateUsesDefault, Settings.shared.apiKey.isEmpty {
+        // Only the LLM engine needs the key.
+        if translateUsesDefault, Settings.shared.translationConfig.engine == .llm, Settings.shared.apiKey.isEmpty {
             pinView.flash("请先在设置里填写翻译的 API Key")
             return
         }
@@ -317,7 +317,7 @@ final class PinWindow: NSPanel {
         }
     }
 
-    /// Whether `translate` is still the real translator (then an API key is needed).
+    /// Whether `translate` is still the real translator (then engine requirements apply).
     var translateUsesDefault = true
 
     /// Shows another picture of the same size without resetting zoom or position.

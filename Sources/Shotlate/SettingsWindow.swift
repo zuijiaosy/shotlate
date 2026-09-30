@@ -9,6 +9,7 @@ enum ShortcutTarget: Equatable { case capture, pinClipboard, togglePins, scanCod
 final class SettingsModel: ObservableObject {
     private let settings = Settings.shared
 
+    @Published var engine = Settings.shared.engine { didSet { settings.engine = engine; testResult = nil } }
     @Published var baseURL = Settings.shared.baseURL { didSet { settings.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines) } }
     @Published var model = Settings.shared.model { didSet { settings.model = model.trimmingCharacters(in: .whitespacesAndNewlines) } }
     @Published var apiKey = "" { didSet { if loadsSecrets { settings.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines) } } }
@@ -36,7 +37,8 @@ final class SettingsModel: ObservableObject {
     }
 
     var config: TranslationConfig {
-        TranslationConfig(baseURL: baseURL, model: model, apiKey: apiKey, targetLanguage: targetLanguage)
+        TranslationConfig(baseURL: baseURL, model: model, apiKey: apiKey, targetLanguage: targetLanguage,
+                          engine: engine, clientKey: settings.clientKey)
     }
 
     /// Re-registers the global hotkeys; while one is being recorded they stay paused until it is done.
@@ -58,7 +60,7 @@ final class SettingsModel: ObservableObject {
         Task { @MainActor in
             defer { isTesting = false }
             do {
-                let result = try await ChatTranslator.translate([.init(id: 0, text: "Take a screenshot and translate it in place.")], config: config)
+                let result = try await Translator.translate([.init(id: 0, text: "Take a screenshot and translate it in place.")], config: config)
                 testResult = result[0].map { "连接成功：\($0)" } ?? "连接成功，但没有返回译文"
             } catch {
                 testResult = "失败：" + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
@@ -242,18 +244,24 @@ struct SettingsView: View {
 
     private var translate: some View {
         Section {
-            TextField("Base URL", text: $model.baseURL, prompt: Text(TranslationConfig.defaultBaseURL))
-            TextField("模型", text: $model.model, prompt: Text(TranslationConfig.defaultModel))
-            SecureField("API Key", text: $model.apiKey, prompt: Text("sk-…"))
+            Picker("翻译引擎", selection: $model.engine) {
+                Text("免费翻译").tag(TranslationEngine.free)
+                Text("大模型").tag(TranslationEngine.llm)
+            }
+            if model.engine == .llm {
+                TextField("Base URL", text: $model.baseURL, prompt: Text(TranslationConfig.defaultBaseURL))
+                TextField("模型", text: $model.model, prompt: Text(TranslationConfig.defaultModel))
+                SecureField("API Key", text: $model.apiKey, prompt: Text("sk-…"))
+            }
             Picker("译成", selection: $model.targetLanguage) {
                 ForEach(SettingsModel.languages, id: \.self) { Text($0).tag($0) }
             }
             HStack {
                 Button("测试连接") { model.testConnection() }
-                    .disabled(model.isTesting || model.apiKey.isEmpty)
+                    .disabled(model.isTesting || (model.engine == .llm && model.apiKey.isEmpty))
                 if model.isTesting { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("恢复默认") { model.resetTranslationDefaults() }
+                if model.engine == .llm { Button("恢复默认") { model.resetTranslationDefaults() } }
             }
             if let result = model.testResult {
                 Text(result)
@@ -262,7 +270,9 @@ struct SettingsView: View {
                     .textSelection(.enabled)
             }
         } footer: {
-            Text("使用 OpenAI 兼容接口，默认是 DeepSeek 的 deepseek-flash。API Key 保存在本机的 ~/Library/Application Support/Shotlate/api-key，只有你的账户能读取。发送给翻译服务的只有识别出的文字，截图本身不会上传。")
+            Text(model.engine == .free
+                 ? "免费翻译使用腾讯交互翻译，不需要任何配置，速度快。想要更自然、更懂上下文的译文，可以改用大模型。发送给翻译服务的只有识别出的文字，截图本身不会上传。"
+                 : "使用 OpenAI 兼容接口，默认是 DeepSeek 的 deepseek-flash。API Key 保存在本机的 ~/Library/Application Support/Shotlate/api-key，只有你的账户能读取。发送给翻译服务的只有识别出的文字，截图本身不会上传。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

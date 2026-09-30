@@ -3,7 +3,7 @@ import ShotlateCore
 
 /// Command-line entry points for checking OCR and in-place translation without the capture UI.
 ///
-///   Shotlate --translate-image input.png output.png [--scale 2]
+///   Shotlate --translate-image input.png output.png [--scale 2] [--engine free|llm]
 ///
 /// Uses the API key from DEEPSEEK_API_KEY. Without a key it substitutes
 /// placeholder translations so layout and rendering can still be checked.
@@ -54,7 +54,9 @@ enum DevTools {
         var scale: CGFloat = 1
         if let i = args.firstIndex(of: "--scale"), i + 1 < args.count, let s = Double(args[i + 1]) { scale = CGFloat(s) }
         do {
-            try translateImage(input: URL(fileURLWithPath: args[2]), output: URL(fileURLWithPath: args[3]), scale: scale)
+            var engine: String?
+            if let i = args.firstIndex(of: "--engine"), i + 1 < args.count { engine = args[i + 1] }
+            try translateImage(input: URL(fileURLWithPath: args[2]), output: URL(fileURLWithPath: args[3]), scale: scale, engineOverride: engine)
             exit(0)
         } catch {
             FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8))
@@ -102,7 +104,7 @@ enum DevTools {
         return try result.get()
     }
 
-    static func translateImage(input: URL, output: URL, scale: CGFloat) throws {
+    static func translateImage(input: URL, output: URL, scale: CGFloat, engineOverride: String? = nil) throws {
         guard let source = CGImageSourceCreateWithURL(input as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
         else { throw CocoaError(.fileReadCorruptFile) }
@@ -120,13 +122,14 @@ enum DevTools {
         if let key = ProcessInfo.processInfo.environment["DEEPSEEK_API_KEY"], !key.isEmpty { config.apiKey = key }
         let items = blocks.map { ChatTranslator.Item(id: $0.id, text: $0.text) }
         let translations: [Int: String]
-        if config.apiKey.isEmpty {
+        if let raw = engineOverride, let engine = TranslationEngine(rawValue: raw) { config.engine = engine }
+        if config.engine == .llm && config.apiKey.isEmpty {
             print("No API key: using placeholder translations")
             translations = Dictionary(uniqueKeysWithValues: blocks.map { ($0.id, placeholder(for: $0.text)) })
         } else {
             let started = Date()
-            translations = try wait { try await ChatTranslator.translate(items, config: config) }
-            print(String(format: "Translated with %@ in %.1fs", config.model, Date().timeIntervalSince(started)))
+            translations = try wait { try await Translator.translate(items, config: config) }
+            print(String(format: "Translated with %@ in %.1fs", config.engine == .free ? "free" : config.model, Date().timeIntervalSince(started)))
         }
         for (id, text) in translations.sorted(by: { $0.key < $1.key }) { print("  #\(id) → \(text)") }
 

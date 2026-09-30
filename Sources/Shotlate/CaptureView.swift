@@ -1387,7 +1387,7 @@ final class CaptureView: NSView {
         }
 
         let config = Settings.shared.translationConfig
-        guard !config.apiKey.isEmpty else {
+        guard config.engine == .free || !config.apiKey.isEmpty else {
             showToast("还没有填写 API Key。请按 Esc 退出截图，在菜单栏 Shotlate → 设置 中填写。", duration: 5)
             return
         }
@@ -1417,7 +1417,7 @@ final class CaptureView: NSView {
                 showToast("正在翻译 \(blocks.count) 段…", duration: nil)
                 let items = blocks.map { ChatTranslator.Item(id: $0.id, text: $0.text) }
                 let translations = try await TranslationService.cache.translate(items, config: config) {
-                    try await ChatTranslator.translate($0, config: config)
+                    try await Translator.translate($0, config: config)
                 }
                 guard let crop = cropSelection(), rect == selection else {
                     translationState = previous

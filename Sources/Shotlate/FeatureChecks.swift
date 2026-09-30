@@ -525,6 +525,25 @@ enum FeatureChecks {
         model.scanCodeShortcut = nil
         center.unregisterAll()
 
+        // The free engine is the default and needs no key; the LLM engine is one pick away.
+        expect(model.engine == .free && Settings.shared.translationConfig.engine == .free, "translation starts on the free engine, without an API key")
+        expect(!Settings.shared.translationConfig.clientKey.isEmpty && Settings.shared.clientKey == Settings.shared.clientKey, "the free engine gets a stable per-install client key")
+        model.engine = .llm
+        expect(Settings.shared.engine == .llm, "picking the LLM engine saves at once")
+        for engine in TranslationEngine.allCases {
+            model.engine = engine
+            let hosting = NSHostingView(rootView: SettingsView(model: model, pane: .translate))
+            hosting.frame = CGRect(x: 0, y: 0, width: 680, height: 460)
+            let window = NSWindow(contentRect: CGRect(x: -8000, y: -8000, width: 680, height: 460), styleMask: .borderless, backing: .buffered, defer: false)
+            window.contentView = hosting
+            hosting.layoutSubtreeIfNeeded()
+            if let rep = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) {
+                hosting.cacheDisplay(in: hosting.bounds, to: rep)
+                write(rep, "settings-translate-\(engine.rawValue).png")
+            }
+        }
+        model.engine = .free
+
         // Every pane, rendered offscreen for a look (without reading the API key).
         for pane in SettingsPane.allCases {
             let hosting = NSHostingView(rootView: SettingsView(model: model, pane: pane))
@@ -593,12 +612,14 @@ enum FeatureChecks {
     }
 
     @MainActor static func pinTranslate() async {
+        let engine = Settings.shared.engine
+        defer { Settings.shared.engine = engine }
+        Settings.shared.engine = .free
         let h = CaptureHarness(lines: ["Settings", "Automatically check for updates", "Save screenshots to Pictures"])
         h.select(CGRect(x: 60, y: 60, width: 420, height: 110))
         guard let rep = h.export() else { return expect(false, "export") }
         let pin = PinManager.shared.pin(rep, frame: CGRect(origin: CGPoint(x: -4000, y: -4000), size: rep.size))
         var sent: [String] = []
-        pin.translateUsesDefault = false
         pin.translate = { rep in
             try await ImageTranslator.translate(rep) { items in
                 sent = items.map(\.text)
@@ -606,6 +627,12 @@ enum FeatureChecks {
             }
         }
         let original = pin.rep
+        if Settings.shared.apiKey.isEmpty {
+            Settings.shared.engine = .llm
+            key(pin, "y", code: 16)
+            expect(sent.isEmpty && !pin.showsTranslation, "the LLM engine still requires an API key")
+            Settings.shared.engine = .free
+        }
         key(pin, "y", code: 16)
         for _ in 0..<400 where !pin.showsTranslation { try? await Task.sleep(for: .milliseconds(100)) }
         expect(pin.showsTranslation && pin.rep !== original, "Y translates the pin in place")

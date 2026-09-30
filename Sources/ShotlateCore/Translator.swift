@@ -1,13 +1,25 @@
 import Foundation
 
+/// Which service translates: the built-in free one needs no setup, the LLM one needs the user's own API key.
+public enum TranslationEngine: String, CaseIterable, Sendable {
+    case free
+    case llm
+}
+
 public struct TranslationConfig: Equatable, Sendable {
+    public var engine: TranslationEngine
+    /// Random per-install id the free service expects in its request header.
+    public var clientKey: String
     public var baseURL: String
     public var model: String
     public var apiKey: String
     public var targetLanguage: String
     public var timeout: TimeInterval
 
-    public init(baseURL: String, model: String, apiKey: String, targetLanguage: String, timeout: TimeInterval = 20) {
+    public init(baseURL: String, model: String, apiKey: String, targetLanguage: String, timeout: TimeInterval = 20,
+                engine: TranslationEngine = .llm, clientKey: String = "") {
+        self.engine = engine
+        self.clientKey = clientKey
         self.baseURL = baseURL
         self.model = model
         self.apiKey = apiKey
@@ -25,6 +37,7 @@ public enum TranslationError: LocalizedError, Equatable {
     case invalidBaseURL(String)
     case http(status: Int, message: String)
     case badResponse(String)
+    case service(String)
 
     public var errorDescription: String? {
         switch self {
@@ -41,6 +54,8 @@ public enum TranslationError: LocalizedError, Equatable {
             }
         case .badResponse(let detail):
             return "翻译结果无法解析：\(detail)"
+        case .service(let detail):
+            return "免费翻译暂时不可用（\(detail)）。可以在设置 → 翻译 中改用大模型。"
         }
     }
 }
@@ -151,6 +166,139 @@ public enum ChatTranslator {
     }
 }
 
+/// Client for Tencent TranSmart's public web endpoint (no key; unofficial, so failures point users at the LLM engine).
+/// It takes a whole list of texts per request but rejects a request over roughly 5000 characters, hence the batching.
+public enum FreeTranslator {
+    static let endpoint = URL(string: "https://transmart.qq.com/api/imt")!
+    static let batchLimit = 4000
+
+    /// Language names shown in Settings → codes the service accepts.
+    static func languageCode(_ language: String) -> String {
+        switch language {
+        case "繁體中文": return "zh-TW"
+        case "English": return "en"
+        case "日本語": return "ja"
+        case "한국어": return "ko"
+        default: return "zh"
+        }
+    }
+
+    /// Splits long items too, retaining their IDs so translations can be reassembled in order.
+    static func batches(_ items: [ChatTranslator.Item], limit: Int = batchLimit) -> [[ChatTranslator.Item]] {
+        precondition(limit >= 2)
+        var result: [[ChatTranslator.Item]] = []
+        var current: [ChatTranslator.Item] = []
+        var count = 0
+        for item in items {
+            var chunks: [String] = []
+            var chunk = ""
+            var length = 0
+            // Count UTF-16 units conservatively without splitting surrogate pairs.
+            for scalar in item.text.unicodeScalars {
+                let size = scalar.utf16.count
+                if length + size > limit {
+                    chunks.append(chunk)
+                    chunk = ""
+                    length = 0
+                }
+                chunk.unicodeScalars.append(scalar)
+                length += size
+            }
+            if !chunk.isEmpty || chunks.isEmpty { chunks.append(chunk) }
+            for text in chunks {
+                let size = text.utf16.count
+                if !current.isEmpty, count + size > limit {
+                    result.append(current)
+                    current = []
+                    count = 0
+                }
+                current.append(.init(id: item.id, text: text))
+                count += size
+            }
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
+    }
+
+    static func makeRequest(texts: [String], config: TranslationConfig) throws -> URLRequest {
+        let clientKey = config.clientKey.isEmpty ? "browser-chrome-110.0.0-Mac OS-shotlate" : config.clientKey
+        let body: [String: Any] = [
+            "header": ["fn": "auto_translation", "client_key": clientKey],
+            "type": "plain",
+            "model_category": "normal",
+            "source": ["lang": "auto", "text_list": texts],
+            "target": ["lang": languageCode(config.targetLanguage)],
+        ]
+        var request = URLRequest(url: endpoint, timeoutInterval: config.timeout)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+                         forHTTPHeaderField: "User-Agent")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    /// Returns the translations in request order. A count mismatch would shift every later paragraph, so it is an error.
+    static func parseResponse(_ data: Data, expected: Int) throws -> [String] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let header = root["header"] as? [String: Any]
+        else { throw TranslationError.badResponse("返回内容不是预期的 JSON") }
+        let code = header["ret_code"] as? String ?? "unknown"
+        guard code == "succ" else { throw TranslationError.service(code) }
+        guard let texts = root["auto_translation"] as? [String], texts.count == expected else {
+            throw TranslationError.badResponse("译文数量与原文不一致")
+        }
+        return texts
+    }
+
+    static func send(_ batch: [ChatTranslator.Item], config: TranslationConfig, session: URLSession) async throws -> [String] {
+        let request = try makeRequest(texts: batch.map(\.text), config: config)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw TranslationError.service(error.localizedDescription)
+        }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw TranslationError.service("HTTP \(http.statusCode)")
+        }
+        return try parseResponse(data, expected: batch.count)
+    }
+
+    public static func translate(_ items: [ChatTranslator.Item], config: TranslationConfig, session: URLSession = .shared) async throws -> [Int: String] {
+        guard !items.isEmpty else { return [:] }
+        let requests = batches(items)
+        return try await withThrowingTaskGroup(of: (Int, [String]).self) { group in
+            for (index, batch) in requests.enumerated() {
+                group.addTask { (index, try await send(batch, config: config, session: session)) }
+            }
+            var responses = Array(repeating: [String](), count: requests.count)
+            for try await (index, texts) in group { responses[index] = texts }
+            var merged: [Int: String] = [:]
+            for (batch, texts) in zip(requests, responses) {
+                for (item, text) in zip(batch, texts) {
+                    // An empty fragment must not discard that part of the original paragraph.
+                    merged[item.id, default: ""] += text.isEmpty ? item.text : text
+                }
+            }
+            return merged
+        }
+    }
+}
+
+/// The one entry point callers use: picks the service from the settings.
+public enum Translator {
+    public static func translate(_ items: [ChatTranslator.Item], config: TranslationConfig, session: URLSession = .shared) async throws -> [Int: String] {
+        switch config.engine {
+        case .free: return try await FreeTranslator.translate(items, config: config, session: session)
+        case .llm: return try await ChatTranslator.translate(items, config: config, session: session)
+        }
+    }
+}
+
 /// In-memory cache so toggling or re-translating the same text costs nothing.
 public final class TranslationCache: @unchecked Sendable {
     private var storage: [String: String] = [:]
@@ -159,7 +307,7 @@ public final class TranslationCache: @unchecked Sendable {
     public init() {}
 
     static func key(_ text: String, _ config: TranslationConfig) -> String {
-        [config.model, config.targetLanguage, text].joined(separator: "\u{1F}")
+        [config.engine == .free ? "free" : config.model, config.targetLanguage, text].joined(separator: "\u{1F}")
     }
 
     public func get(_ text: String, config: TranslationConfig) -> String? {
