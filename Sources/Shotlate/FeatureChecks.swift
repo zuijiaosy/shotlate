@@ -35,6 +35,7 @@ enum FeatureChecks {
         ("toolbar-placement", toolbarPlacement),
         ("toolbar-keys", toolbarKeys),
         ("ocr", ocr),
+        ("scroll-result-keys", scrollResultKeys),
         ("secret-file", secretFile),
         ("updater", updater),
     ]
@@ -670,11 +671,42 @@ enum FeatureChecks {
         expect(NSPasteboard.general.string(forType: .string) == nil, "without copying it by itself")
         let panel = h.view.subviews.compactMap { $0 as? OCRPanelView }.first!
         panel.textView.string = text + "（已修改）"
-        panel.copyText()
-        expect(NSPasteboard.general.string(forType: .string) == text + "（已修改）", "the copy button copies the edited text")
+        h.key("c", code: 8)
+        expect(NSPasteboard.general.string(forType: .string) == text + "（已修改）", "C copies the edited text")
+        expect(h.view.testing_ocrText != nil, "and keeps the panel open")
         h.screenshot().map { write($0, "ocr.png") }
         h.key("\u{1b}", code: 53)
         expect(h.view.testing_ocrText == nil && h.view.testing_selection != nil, "Esc closes the panel first, keeping the selection")
+    }
+
+    @MainActor static func scrollResultKeys() async {
+        guard let screen = NSScreen.main, let image = sampleRep().cgImage else { return expect(false, "screen and sample image") }
+        func open() -> ScrollResultWindow? {
+            ScrollResultWindow.show(image: image, scale: 2, on: screen)
+            return ScrollResultWindow.testing_open.last
+        }
+
+        NSPasteboard.general.clearContents()
+        guard let w1 = open() else { return expect(false, "result window opens") }
+        key(w1, "c", code: 8)
+        expect(NSPasteboard.general.data(forType: .png) != nil || NSPasteboard.general.data(forType: .tiff) != nil, "C copies the long screenshot")
+        expect(!w1.isVisible, "and closes the window")
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("shotlate-scroll-keys-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let previous = Settings.shared.saveDirectory
+        Settings.shared.saveDirectory = directory
+        defer { Settings.shared.saveDirectory = previous; try? FileManager.default.removeItem(at: directory) }
+        guard let w2 = open() else { return expect(false, "result window opens") }
+        key(w2, "s", code: 1)
+        let saved = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        expect(saved.count == 1 && !w2.isVisible, "S saves it to the save folder (\(saved))")
+
+        let before = PinManager.shared.pins.count
+        guard let w3 = open() else { return expect(false, "result window opens") }
+        key(w3, "t", code: 17)
+        expect(PinManager.shared.pins.count == before + 1 && !w3.isVisible, "T pins it")
+        PinManager.shared.pins.last?.close()
     }
 
     @MainActor static func pinText() async {

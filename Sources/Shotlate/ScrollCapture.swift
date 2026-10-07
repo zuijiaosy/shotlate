@@ -684,10 +684,10 @@ final class ScrollResultWindow: NSWindow, NSWindowDelegate {
         hint.font = .systemFont(ofSize: 11)
         bar.addArrangedSubview(hint)
         bar.addArrangedSubview(NSView())
-        for (title, action) in [("贴图", #selector(pinImage)), ("保存", #selector(saveImage)), ("复制", #selector(copyImage))] {
+        for (title, action) in [("贴图 (T)", #selector(pinImage)), ("保存 (S)", #selector(saveImage)), ("复制 (C)", #selector(copyImage))] {
             let button = NSButton(title: title, target: self, action: action)
             button.bezelStyle = .push
-            if title == "复制" { button.keyEquivalent = "\r" }
+            if action == #selector(copyImage) { button.keyEquivalent = "\r" }
             bar.addArrangedSubview(button)
         }
         root.addSubview(bar)
@@ -723,8 +723,19 @@ final class ScrollResultWindow: NSWindow, NSWindowDelegate {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { close() } else { super.keyDown(with: event) }
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard event.keyCode != 53 else { return close() }
+        guard flags.isEmpty else { return super.keyDown(with: event) }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "c": copyImage()
+        case "t": pinImage()
+        case "s": saveImage()
+        default: super.keyDown(with: event)
+        }
     }
+
+    var testing_rep: NSBitmapImageRep { rep }
+    static var testing_open: [ScrollResultWindow] { open }
 
     func windowWillClose(_ notification: Notification) {
         ScrollResultWindow.open.removeAll { $0 === self }

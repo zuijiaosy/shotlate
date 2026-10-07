@@ -984,7 +984,8 @@ final class OCRPanelView: PanelView {
     let textView: NSTextView
     private let scroll = NSScrollView()
     private let title = NSTextField(labelWithString: "识别结果")
-    private let copyButton = NSButton(title: "复制", target: nil, action: nil)
+    private static let copyTitle = "复制 (C)"
+    private let copyButton = NSButton(title: copyTitle, target: nil, action: nil)
     private var closeButton: ChromeButton!
     private var resetWork: DispatchWorkItem?
 
@@ -1029,7 +1030,7 @@ final class OCRPanelView: PanelView {
         textView.string = text
         title.stringValue = "识别结果 · \(lineCount) 行"
         resetWork?.cancel()
-        copyButton.title = "复制"
+        copyButton.title = Self.copyTitle
     }
 
     @objc func copyText() {
@@ -1041,7 +1042,7 @@ final class OCRPanelView: PanelView {
     private func flashCopied() {
         copyButton.title = "已复制 ✓"
         resetWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.copyButton.title = "复制" }
+        let work = DispatchWorkItem { [weak self] in self?.copyButton.title = Self.copyTitle }
         resetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
     }
