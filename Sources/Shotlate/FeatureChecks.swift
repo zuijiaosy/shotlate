@@ -671,10 +671,13 @@ enum FeatureChecks {
         expect(NSPasteboard.general.string(forType: .string) == nil, "without copying it by itself")
         let panel = h.view.subviews.compactMap { $0 as? OCRPanelView }.first!
         panel.textView.string = text + "（已修改）"
+        h.screenshot().map { write($0, "ocr.png") }
         h.key("c", code: 8)
         expect(NSPasteboard.general.string(forType: .string) == text + "（已修改）", "C copies the edited text")
-        expect(h.view.testing_ocrText != nil, "and keeps the panel open")
-        h.screenshot().map { write($0, "ocr.png") }
+        expect(h.view.testing_ocrText == nil && h.view.testing_selection != nil, "and closes the panel, keeping the selection")
+
+        h.key("x", code: 7)
+        for _ in 0..<300 where h.view.testing_ocrText == nil { try? await Task.sleep(for: .milliseconds(100)) }
         h.key("\u{1b}", code: 53)
         expect(h.view.testing_ocrText == nil && h.view.testing_selection != nil, "Esc closes the panel first, keeping the selection")
     }

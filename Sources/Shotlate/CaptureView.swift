@@ -1082,9 +1082,12 @@ final class CaptureView: NSView {
             return
         }
         guard flags.isEmpty else { return }
-        // While the OCR panel is open, C copies its text; this wins over any toolbar key bound to C.
+        // While the OCR panel is open, C copies its text and closes the panel, keeping the selection;
+        // this wins over any toolbar key bound to C.
         if key == "c", !ocrPanel.isHidden {
             ocrPanel.copyText()
+            closeOCRPanel()
+            showToast("已复制文字", duration: 1.5)
             return
         }
         if let action = ToolbarAction.action(forKey: key) {
