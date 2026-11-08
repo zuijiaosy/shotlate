@@ -449,6 +449,49 @@ import Testing
         for y in 10..<(60 + 92) { #expect(stitcher.row(y) == Self.contentRow(y), "row \(y)") }
     }
 
+    @Test func repeatingContentWithLongStepFollowsHint() {
+        // Same-height list rows (period 24) scrolled by more than a dozen periods per frame: every period
+        // scores equally, so the right offset must survive into the candidates the hint picks from.
+        func periodic(_ scroll: Int) -> PixelBuffer {
+            var data = [UInt8]()
+            for y in 0..<400 { data += y < 10 ? Self.solidRow(16) : Self.contentRow((scroll + y) % 24) }
+            return PixelBuffer(width: Self.width, height: 400, bytesPerRow: Self.width * 4, data: data)
+        }
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(periodic(0))
+        var scroll = 0
+        for _ in 0..<5 {
+            scroll += 230
+            #expect(stitcher.add(periodic(scroll), expectedOffset: 230) == .appended(230))
+        }
+    }
+
+    @Test func sizeChangeKeepsStitchedImage() {
+        let stitcher = ScrollStitcher()
+        _ = stitcher.add(Self.frame(scroll: 0))
+        _ = stitcher.add(Self.frame(scroll: 40))
+        let height = stitcher.height
+        let smaller = PixelBuffer(width: Self.width, height: 80, bytesPerRow: Self.width * 4, data: Array(Self.frame(scroll: 50).data.prefix(Self.width * 4 * 80)))
+        #expect(stitcher.add(smaller) == .sizeChanged)
+        #expect(stitcher.height == height)
+        #expect(stitcher.add(Self.frame(scroll: 70)) == .appended(30))
+    }
+
+    @Test func imageMatchesStitchedRows() throws {
+        let stitcher = ScrollStitcher()
+        for scroll in stride(from: 0, through: 200, by: 25) { _ = stitcher.add(Self.frame(scroll: scroll)) }
+        let image = try #require(stitcher.makeImage())
+        let pixels = try #require(PixelBuffer(image: image))
+        #expect(pixels.height == stitcher.height)
+        for y in 0..<stitcher.height {
+            let start = y * pixels.bytesPerRow
+            #expect(Array(pixels.data[start..<(start + Self.width * 4)]) == stitcher.row(y), "row \(y)")
+        }
+        // Stitching more frames afterwards leaves an image already made untouched.
+        _ = stitcher.add(Self.frame(scroll: 260))
+        #expect(PixelBuffer(image: image)?.data == pixels.data)
+    }
+
     @Test func previewShowsTheNewestRows() {
         let stitcher = ScrollStitcher()
         for scroll in stride(from: 0, through: 300, by: 30) { _ = stitcher.add(Self.frame(scroll: scroll)) }

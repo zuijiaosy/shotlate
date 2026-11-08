@@ -23,6 +23,9 @@ public final class ScrollStitcher {
         case scrolledBack
         case noOverlap
         case limitReached
+        /// The frame size changed mid-session (display resolution or scaling); the frame was dropped
+        /// and everything stitched so far is kept.
+        case sizeChanged
     }
 
     public let maxHeight: Int
@@ -31,6 +34,9 @@ public final class ScrollStitcher {
     public private(set) var width = 0
     /// How the last frame compared with the one before it; for logs.
     public private(set) var lastDiagnostics = ""
+    /// Bumped whenever new frames start being compared against a different frame, so a scroll
+    /// accumulator can restart from that frame and not from a rejected one.
+    public private(set) var referenceVersion = 0
 
     /// Committed row-major RGBA bytes in blocks of a few megabytes.
     private var chunks: [[UInt8]] = []
@@ -42,6 +48,8 @@ public final class ScrollStitcher {
     /// The first frame, kept whole until the content first moves and its footer is known.
     private var first: PixelBuffer?
     private var previous: Signatures?
+    /// Pixels of the frame `previous` was computed from; a byte-identical frame skips signatures entirely.
+    private var previousData: [UInt8] = []
     private var frameHeight = 0
 
     public var height: Int { width == 0 ? 0 : committedHeight + tail.count / (width * 4) }
@@ -64,9 +72,20 @@ public final class ScrollStitcher {
     /// `expectedOffset` is how far the content probably moved, in rows (from scroll events); it only
     /// breaks near-ties between candidate offsets, so a wrong hint never stitches frames that don't match.
     public func add(_ frame: PixelBuffer, expectedOffset: Int? = nil) -> Result {
-        let signatures = self.signatures(frame)
         let h = frame.height
-        guard width == frame.width, frameHeight == h, let previous else {
+        if previous != nil, width != frame.width || frameHeight != h {
+            // Starting over would silently throw away the long image; keep it and let the caller say so.
+            lastDiagnostics = "size \(frame.width)x\(h) differs from \(width)x\(frameHeight), frame dropped"
+            return .sizeChanged
+        }
+        // Idle frames while the user isn't scrolling are usually byte-identical: a memcmp is far cheaper
+        // than computing signatures.
+        if previous != nil, Self.sameBytes(frame.data, previousData) {
+            lastDiagnostics = "identical"
+            return .unchanged
+        }
+        let signatures = self.signatures(frame)
+        guard let previous else {
             width = frame.width
             frameHeight = h
             chunks = []
@@ -74,6 +93,8 @@ public final class ScrollStitcher {
             first = frame
             tail = rows(frame, 0..<h)
             self.previous = signatures
+            previousData = frame.data
+            referenceVersion += 1
             lastDiagnostics = "start \(frame.width)x\(h)"
             return .started
         }
@@ -102,6 +123,8 @@ public final class ScrollStitcher {
                 edge -= d
                 tail = rows(frame, edge..<h)
                 self.previous = signatures
+                previousData = frame.data
+                referenceVersion += 1
             }
             return .scrolledBack
         }
@@ -128,6 +151,8 @@ public final class ScrollStitcher {
         edge = end
         tail = rows(frame, end..<h)
         self.previous = signatures
+        previousData = frame.data
+        referenceVersion += 1
         return .appended(d)
     }
 
@@ -139,6 +164,10 @@ public final class ScrollStitcher {
         guard band.count >= 16 else { return "size \(a.width)x\(a.height) fixed top \(top) bottom \(bottom), no moving band" }
         return "size \(a.width)x\(a.height) fixed top \(top) bottom \(bottom) band \(band.count) "
             + Self.offset(previous: sa, new: sb, band: band).description
+    }
+
+    private static func sameBytes(_ a: [UInt8], _ b: [UInt8]) -> Bool {
+        a.count == b.count && a.withUnsafeBytes { x in b.withUnsafeBytes { y in memcmp(x.baseAddress!, y.baseAddress!, a.count) == 0 } }
     }
 
     private func append(_ bytes: [UInt8]) {
@@ -291,11 +320,22 @@ public final class ScrollStitcher {
 
         // Rescore the best candidates with every template; a plateau of equal seeds counts once.
         let fullWeight = weight(templates)
-        var minima: [(d: Int, s: Double)] = []
-        for i in seeds where minima.count < 6 {
+        // With repeating rows many seeds tie, so take plenty: cutting off at a handful dropped the real offset.
+        var pool: [Int] = []
+        for i in seeds where pool.count < 32 {
             let d = i - limit
-            guard !minima.contains(where: { abs($0.d - d) <= 3 }),
-                  let s = score(previous, new, templates: templates, totalWeight: fullWeight, d: d, band: band) else { continue }
+            guard !pool.contains(where: { abs($0 - d) <= 3 }) else { continue }
+            pool.append(d)
+        }
+        // The hint is only a tie-breaker for scoring, but it must be in the pool: with repeating
+        // content the true offset can sit a hair away from the hint and lose the deduplication above.
+        if let hint {
+            let d = min(max(hint, -limit), limit)
+            if !pool.contains(where: { abs($0 - d) <= 3 }) { pool.append(d) }
+        }
+        var minima: [(d: Int, s: Double)] = []
+        for d in pool {
+            guard let s = score(previous, new, templates: templates, totalWeight: fullWeight, d: d, band: band) else { continue }
             minima.append((d, s))
         }
         minima.sort { $0.s < $1.s }
@@ -328,12 +368,23 @@ public final class ScrollStitcher {
         return out
     }
 
-    /// The stitched image so far.
+    /// The stitched image so far. The image reads straight from the stitched chunks instead of a joined
+    /// copy, which for a long, wide capture would double the memory at the moment it is needed most.
+    /// The chunks are captured by value, so stitching more frames afterwards doesn't change the image.
     public func makeImage() -> CGImage? {
         guard width > 0, height > 0 else { return nil }
-        var data = Data(capacity: height * width * 4)
-        for chunk in chunks + [tail] { data.append(contentsOf: chunk) }
-        return Self.image(data, width: width, height: height)
+        let source = ChunkedBytes(chunks.filter { !$0.isEmpty } + (tail.isEmpty ? [] : [tail]))
+        var callbacks = CGDataProviderDirectCallbacks(
+            version: 0,
+            getBytePointer: nil,
+            releaseBytePointer: nil,
+            getBytesAtPosition: { info, buffer, position, count in
+                Unmanaged<ChunkedBytes>.fromOpaque(info!).takeUnretainedValue().copy(into: buffer, from: Int(position), count: count)
+            },
+            releaseInfo: { info in Unmanaged<ChunkedBytes>.fromOpaque(info!).release() })
+        guard let provider = CGDataProvider(directInfo: Unmanaged.passRetained(source).toOpaque(),
+                                            size: off_t(source.count), callbacks: &callbacks) else { return nil }
+        return Self.image(provider, width: width, height: height)
     }
 
     /// The bottom of the stitched image scaled to `targetWidth` pixels, at most `maxHeight` pixels tall.
@@ -365,7 +416,11 @@ public final class ScrollStitcher {
 
     private static func image(_ data: Data, width: Int, height: Int) -> CGImage? {
         guard let provider = CGDataProvider(data: data as CFData) else { return nil }
-        return CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
+        return image(provider, width: width, height: height)
+    }
+
+    private static func image(_ provider: CGDataProvider, width: Int, height: Int) -> CGImage? {
+        CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4,
                        space: CGColorSpace(name: CGColorSpace.sRGB)!,
                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
                        provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
@@ -380,5 +435,44 @@ public final class ScrollStitcher {
             y -= rows
         }
         return []
+    }
+}
+
+/// Byte chunks read as one contiguous range, for a direct-access data provider.
+private final class ChunkedBytes {
+    let chunks: [[UInt8]]
+    let starts: [Int]
+    let count: Int
+
+    init(_ chunks: [[UInt8]]) {
+        self.chunks = chunks
+        var starts = [Int](), total = 0
+        for chunk in chunks {
+            starts.append(total)
+            total += chunk.count
+        }
+        self.starts = starts
+        count = total
+    }
+
+    func copy(into buffer: UnsafeMutableRawPointer, from position: Int, count wanted: Int) -> Int {
+        guard position < count else { return 0 }
+        // Last chunk starting at or before `position`.
+        var lo = 0, hi = starts.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if starts[mid] <= position { lo = mid } else { hi = mid - 1 }
+        }
+        var copied = 0, index = lo, offset = position - starts[lo]
+        let total = min(wanted, count - position)
+        while copied < total {
+            let chunk = chunks[index]
+            let n = min(chunk.count - offset, total - copied)
+            chunk.withUnsafeBytes { (buffer + copied).copyMemory(from: $0.baseAddress! + offset, byteCount: n) }
+            copied += n
+            index += 1
+            offset = 0
+        }
+        return copied
     }
 }

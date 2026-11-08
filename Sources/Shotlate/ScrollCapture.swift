@@ -207,34 +207,34 @@ guard rect.contains(NSEvent.mouseLocation), event.scrollingDeltaY != 0 else { re
         guard let frame = PixelBuffer(bgra: pixels) else { return true }
         let began = Date()
         let hint = pendingScroll.flatMap { abs($0) >= 1 ? Int($0.rounded()) : nil }
+        let reference = stitcher.referenceVersion
         let result = stitcher.add(frame, expectedOffset: hint)
-        switch result {
-        case .started: pendingScroll = 0
-        // Events not yet visible in this frame are few; starting over keeps a stale total from drifting.
-        case .appended: pendingScroll = 0
-        default: break
-        }
+        // The hint is the movement since the frame new ones are compared against, so it restarts only when
+        // that frame changes; after a rejected frame it keeps counting from the last accepted one.
+        if stitcher.referenceVersion != reference { pendingScroll = 0 }
+        let height = stitcher.height
         stitchedFrames += 1
         if let log {
             let ms = Int(Date().timeIntervalSince(began) * 1000)
-            log.write("frame \(stitchedFrames) skipped \(skippedFrames) hint \(hint.map(String.init) ?? "-") \(ms) ms → \(result) height \(stitcher.height) | \(stitcher.lastDiagnostics)")
+            log.write("frame \(stitchedFrames) skipped \(skippedFrames) hint \(hint.map(String.init) ?? "-") \(ms) ms → \(result) height \(height) | \(stitcher.lastDiagnostics)")
             log.save(frame, index: stitchedFrames)
         }
-        DispatchQueue.main.async { self.handle(result) }
+        DispatchQueue.main.async { self.handle(result, height: height) }
         return true
     }
 
     // MARK: Main thread
 
-    private func handle(_ result: ScrollStitcher.Result) {
+    /// `height` comes with the result because the stitcher belongs to `stitchQueue`.
+    private func handle(_ result: ScrollStitcher.Result, height: Int) {
         guard !finished else { return }
-        if ProcessInfo.processInfo.environment["SHOTLATE_DEBUG_STITCH"] != nil { print("stitch:", result, stitcher.height) }
+        if ProcessInfo.processInfo.environment["SHOTLATE_DEBUG_STITCH"] != nil { print("stitch:", result, height) }
         lastFrameAt = Date()
         switch result {
         case .started, .appended:
             if case .appended = result { autoProgress = true }
             setLost(false)
-            panel.setStatus("\(stitcher.height.formatted()) px · " + (autoScrolling ? "自动滚动中…" : "继续滚动，或点完成"))
+            panel.setStatus("\(height.formatted()) px · " + (autoScrolling ? "自动滚动中…" : "继续滚动，或点完成"))
             refreshPreview(force: result == .started)
         case .unchanged:
             // A frame matching the last stitched one means we're back on track, even before new rows arrive.
@@ -250,6 +250,10 @@ guard rect.contains(NSEvent.mouseLocation), event.scrollingDeltaY != 0 else { re
         case .limitReached:
             panel.setStatus("已达到长度上限")
             finish()
+        case .sizeChanged:
+            // No later frame can be stitched; end here with what we have rather than scroll on uncaptured.
+            finish()
+            HUD.show("画面尺寸变了，长截图已结束")
         }
     }
 
@@ -332,9 +336,6 @@ guard AXIsProcessTrustedWithOptions(options) else {
     }
 
     /// Scrolls the content under the region by `points`; negative moves towards the end of the document.
-    /// Sent as a short trackpad gesture (began, changed, ended) because some views ignore continuous
-    /// scroll events without a phase.
-    /// Scrolls the content under the region by `points`; negative moves towards the end of the document.
     /// If `autoScrollBlock` is set (dev demo only), calls it with the magnitude so the block can
     /// drive an NSScrollView directly without Accessibility permission.
     /// Otherwise sends a trackpad gesture over CGEvent so the target app's own scroll view moves.
@@ -359,7 +360,8 @@ guard AXIsProcessTrustedWithOptions(options) else {
             let delta = i == steps ? 0 : (points * CGFloat(i + 1) / CGFloat(steps)).rounded() - sent
             sent += delta
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) / 60) { [self] in
-                guard !finished, let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                // Pausing mid-gesture skips the remaining steps, but the gesture still has to end.
+                guard i == steps || (!finished && autoScrolling), let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
                                                      wheel1: Int32(delta), wheel2: 0, wheel3: 0) else { return }
                 event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
                 event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
@@ -399,9 +401,13 @@ guard AXIsProcessTrustedWithOptions(options) else {
         stitchQueue.async { [stitcher, self] in
             self.stitchNext(keepDraining: false)
             let image = stitcher.makeImage()
-            self.log?.write("finish height \(stitcher.height)")
+            let height = stitcher.height
+            self.log?.write("finish height \(height)")
             DispatchQueue.main.async {
-                guard let image else { return }
+                guard let image else {
+                    if height > 0 { HUD.show("长截图生成失败") }
+                    return
+                }
                 if let onFinished = self.onFinished {
                     onFinished(image)
                     return
