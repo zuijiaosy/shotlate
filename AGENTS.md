@@ -91,9 +91,9 @@ docs/images/            README 用的动图和截图
 
 ## 官网
 
-另一个目录：`/Users/lin/super.engineering/projects/snap-web`（TanStack Start，预渲染成静态页面；这个目录目前没有 git 提交和远程仓库）。
+另一个目录：`/Users/lin/code/my/shotlate-web`（TanStack Start，预渲染成静态页面；GitHub `zuijiaosy/shotlate-web`，分支 `main`，推送不会自动部署）。
 
-- 托管在 Cloudflare **Pages** 的 `shotlate` 项目，地址 `https://shotlate.pages.dev`。部署用 `pnpm run deploy`（`wrangler pages deploy --branch main`）。不要再用 workers.dev：那个地址会带出账号子域，旧的 Worker 已经删除。
+- 托管在 Cloudflare **Pages** 的 `shotlate` 项目，地址 `https://shotlate.pages.dev`。部署用 `pnpm run deploy`（`wrangler pages deploy --branch main`）；wrangler 登录过期时用 `wrangler login --browser=false`，在已登录 Cloudflare 的浏览器里打开它给出的链接授权。不要再用 workers.dev：那个地址会带出账号子域，旧的 Worker 已经删除。
 - 下载按钮默认跳到 `https://github.com/zuijiaosy/shotlate/releases/latest`；构建时设置 `VITE_DMG_URL=https://<R2 公开域名>/Shotlate-latest.dmg` 就改成直接从 R2 下载。
 - 页面文字在 `src/routes/*.tsx`、`src/content/manual.ts`、`src/content/faq.ts`，功能有变化时和本仓库 README 一起更新。
 - `public/shots/` 的截图和视频由应用本身渲染：`SHOTLATE_APP=<本仓库>/build/Shotlate.app pnpm assets`（先 `scripts/build-app.sh`）。UI 演示步骤的文件名（`--ui-demo` 的 `NN-name.png`）被 `scripts/assets/build-assets.sh` 引用，改 UIDemo 的步骤时同步改脚本。
