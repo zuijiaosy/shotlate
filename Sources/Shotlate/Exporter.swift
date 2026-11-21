@@ -49,23 +49,32 @@ enum Exporter {
 
     /// `Shotlate 2026-09-25 15.30.00.png`
     static func defaultFileName(format: ImageFormat, date: Date = Date()) -> String {
+        defaultFileName(fileExtension: format.fileExtension, date: date)
+    }
+
+    static func defaultFileName(fileExtension: String, date: Date = Date()) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
-        return "Shotlate \(formatter.string(from: date)).\(format.fileExtension)"
+        return "Shotlate \(formatter.string(from: date)).\(fileExtension)"
+    }
+
+    /// `name` in `directory`, with " 2", " 3"… added before the extension if it's taken.
+    static func availableURL(in directory: URL, name: String) -> URL {
+        var url = directory.appendingPathComponent(name)
+        var suffix = 2
+        let base = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = directory.appendingPathComponent("\(base) \(suffix).\(ext)")
+            suffix += 1
+        }
+        return url
     }
 
     /// Saves into the configured folder with a timestamped name and returns the file URL.
     static func save(_ rep: NSBitmapImageRep, format: ImageFormat, directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let name = defaultFileName(format: format)
-        var url = directory.appendingPathComponent(name)
-        var suffix = 2
-        while FileManager.default.fileExists(atPath: url.path) {
-            let base = (name as NSString).deletingPathExtension
-            url = directory.appendingPathComponent("\(base) \(suffix).\(format.fileExtension)")
-            suffix += 1
-        }
+        let url = availableURL(in: directory, name: defaultFileName(format: format))
         try write(rep, format: format, to: url)
         return url
     }

@@ -180,7 +180,7 @@ private func separator(height: CGFloat = 18) -> NSView {
 }
 
 enum ToolbarAction {
-    case tool(Tool), undo, ocr, translate, pin, longCapture, cancel, save, done
+    case tool(Tool), undo, ocr, translate, pin, longCapture, recordGIF, cancel, save, done
 
     /// Buttons with a single key can have it changed; undo, save, cancel and done keep the shortcuts everyone knows.
     var keyID: String? {
@@ -190,6 +190,7 @@ enum ToolbarAction {
         case .translate: return "translate"
         case .pin: return "pin"
         case .longCapture: return "longCapture"
+        case .recordGIF: return "gif"
         default: return nil
         }
     }
@@ -214,6 +215,7 @@ enum ToolbarAction {
         case .translate: return "翻译到原位"
         case .pin: return "贴到屏幕上"
         case .longCapture: return "长截图"
+        case .recordGIF: return "录制 GIF"
         case .cancel: return "退出截图"
         case .save: return "保存"
         case .done: return "复制到剪贴板"
@@ -226,6 +228,7 @@ enum ToolbarAction {
         case .ocr: return "结果可以编辑，再点复制"
         case .translate: return "再按一次切换原文"
         case .longCapture: return "在选区里滚动，自动拼接"
+        case .recordGIF: return "再按截图快捷键停止"
         case .save: return "⇧⌘S 另存为"
         case .done: return "也可以双击选区"
         default: return nil
@@ -233,7 +236,7 @@ enum ToolbarAction {
     }
 
     /// Every button that has a single key, in toolbar order.
-    static let keyed: [ToolbarAction] = Tool.allCases.map { .tool($0) } + [.ocr, .translate, .pin, .longCapture]
+    static let keyed: [ToolbarAction] = Tool.allCases.map { .tool($0) } + [.ocr, .translate, .pin, .longCapture, .recordGIF]
 
     /// The button an unmodified key press triggers.
     static func action(forKey key: String) -> ToolbarAction? {
@@ -245,7 +248,7 @@ enum ToolbarAction {
 enum ToolbarKeys {
     private static let storageKey = "toolbar.keys"
     static let defaults: [String: String] = Dictionary(uniqueKeysWithValues: Tool.allCases.map { ($0.rawValue, $0.defaultKey) })
-        .merging(["ocr": "x", "translate": "y", "pin": "t", "longCapture": "s"]) { a, _ in a }
+        .merging(["ocr": "x", "translate": "y", "pin": "t", "longCapture": "s", "gif": "g"]) { a, _ in a }
 
     private static var stored: [String: String] {
         get { UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String] ?? [:] }
@@ -312,6 +315,7 @@ final class ToolbarView: PanelView {
         translateButton = add(.translate, symbolImage("translate", size: 16, weight: .light))
         _ = add(.pin, symbolImage("pin", size: 16, weight: .light))
         _ = add(.longCapture, symbolImage("arrow.up.and.down.text.horizontal", size: 16, weight: .light))
+        _ = add(.recordGIF, symbolImage("record.circle", size: 16, weight: .light))
         _ = add(.cancel, symbolImage("xmark", size: 16, weight: .light))
         _ = add(.save, symbolImage("square.and.arrow.down", size: 16, weight: .light))
         add(.done, symbolImage("checkmark", size: 16, weight: .regular)).tint = selectionBlue

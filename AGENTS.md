@@ -4,17 +4,18 @@
 
 ## 产品原则：小而精
 
-Shotlate（原名 Snap）是 macOS 菜单栏截图工具，核心路径只有：**截图 → 标注 → 复制 / 保存 / 贴图 / 识别 / 翻译**，外加长截图和扫码。项目刻意从“大而全”精简过，**判断一个功能时先问要不要做，而不是怎么做**。
+Shotlate（原名 Snap）是 macOS 菜单栏截图工具，核心路径只有：**截图 → 标注 → 复制 / 保存 / 贴图 / 识别 / 翻译**，外加长截图、GIF 录制和扫码。项目刻意从“大而全”精简过，**判断一个功能时先问要不要做，而不是怎么做**。
 
 以下功能是有意删掉的，没有用户明确要求不要加回来：超级截图、界面元素识别、比例锁定 / 输入尺寸、截取鼠标指针、刷新截图、截图历史、椭圆 / 直线 / 折线 / 记号笔 / 橡皮擦、不透明度调节、智能打码、OCR 表格 / 代码模式、打印、分享、美化背景 / 圆角 / 阴影、文件名模板、复制为文件、自动保存、音效、贴图分组 / Solo / 旋转翻转 / 灰度反色 / 缩略图 / 拖入替换 / 多选 / 吸附 / 鼠标穿透 / 恢复关闭 / 退出后恢复、白板、屏幕触发角、自定义快捷键命令、`snap://` 自动化和命令行、忽略应用、剪贴板贴文字 / 色卡。
 
 已经定下来的交互（改之前先确认）：
 
 - 工具栏只有图标，没有快捷键角标和分隔线（仿 iShot）。指针停留 500 毫秒后弹出悬停卡片，显示名称和快捷键；卡片上点按键可以改单键快捷键，冲突时两个按钮互换。
-- 7 个标注工具默认快捷键是 `1`–`7`（矩形、箭头、画笔、马赛克、放大镜、文字、序号），`X` 是 OCR，`Y` 翻译，`T` 贴图，`S` 长截图；撤销 `⌘Z`、退出 `Esc`、保存 `⌘S`、完成 `↩` 不能改。工具栏上没有重做按钮，只保留 `⇧⌘Z`。
+- 7 个标注工具默认快捷键是 `1`–`7`（矩形、箭头、画笔、马赛克、放大镜、文字、序号），`X` 是 OCR，`Y` 翻译，`T` 贴图，`S` 长截图，`G` 录制 GIF；撤销 `⌘Z`、退出 `Esc`、保存 `⌘S`、完成 `↩` 不能改。工具栏上没有重做按钮，只保留 `⇧⌘Z`。
 - 序号放下后在右侧直接打开文字输入（说明文字）；下一次点击保留文字并放下一个序号；不输入文字时只保留序号。
 - OCR 只做纯文本识别，结果显示在可编辑面板里，**不会自动复制**，点「复制」按钮或按 `C` 才复制；按 `C` 复制后关闭面板、保留选区。
 - 长截图结果窗口：`C`（或 `↩`）复制、`S` 保存、`T` 贴图。
+- GIF 录制刻意保持简单：没有设置项（固定 15 fps、1x、60 秒 / 200 MB 上限），没有剪辑、标注或贴图。结束方式：面板「停止」、点菜单栏图标、再按截图快捷键。结果窗口 `C`（或 `↩`）复制、`S` 保存，关闭即放弃。
 - 设置窗口左侧是菜单（快捷键 / 保存 / 翻译 / 通用），**没有保存按钮**，每项改动立即写入。
 - 默认保存到 `~/Downloads`。
 - 界面文案、README、提交信息用中文；代码注释用英文，风格简短，写“为什么”。
@@ -52,7 +53,8 @@ rm -rf /Applications/Shotlate.app && ditto build/Shotlate.app /Applications/Shot
 
 ```
 Sources/ShotlateCore/   不依赖 AppKit 的纯逻辑，有单元测试：Vision 坐标换算与段落合并（TextBlocks）、取色（ColorSampling）、
-                        翻译接口与缓存（Translator）、长截图拼接（ScrollStitcher）、贴图文字选择（TextSelection）
+                        翻译接口与缓存（Translator）、长截图拼接（ScrollStitcher）、贴图文字选择（TextSelection）、
+                        流式 GIF 编码（GIFEncoder：只写变化区域、≤255 色无损、否则中位切分不抖动）
 Sources/Shotlate/       菜单栏应用
 Tests/ShotlateCoreTests 单元测试（只测 ShotlateCore）
 Resources/              Info.plist、图标；scripts/ 构建、打包、测试、生成发布说明
@@ -72,6 +74,7 @@ docs/images/            README 用的动图和截图
 - **Settings.swift**：设置都在 UserDefaults（域 `app.shotlate.Shotlate`）；翻译 API Key 存 `~/Library/Application Support/Shotlate/api-key`（权限 600，**不用钥匙串**，因为每次重新签名都会弹密码框）。未打包运行（`.build/debug/Shotlate`）时 Key 只读环境变量 `DEEPSEEK_API_KEY`，从不碰真实配置。
 - **SettingsWindow.swift**：`SettingsModel` 的每个属性 `didSet` 立即写入 Settings；改全局快捷键会发 `Settings.didChange`，AppDelegate 重新注册（HotKey.swift，Carbon，不需要辅助功能权限）。
 - **Updater.swift**：包一层 Sparkle 的 `SPUStandardUpdaterController`。菜单栏应用没有 Dock 图标，所以开了“温和提醒”：定时检查发现新版时不弹窗，只让 AppDelegate 在菜单顶部显示「有新版本 …」，点了才弹 Sparkle 的窗口。只在打包的 .app 里启动；`.build/debug` 和自检不碰 Sparkle。Sparkle 的配置在 Info.plist 的 `SU*` 键里。
+- **GIFRecorder.swift**：GIF 录制，结构照搬长截图（SCStream → 只留最新一帧 → 串行队列编码），边录边写临时文件（`$TMPDIR/Shotlate GIF/<uuid>/`），内存不随时长增长。帧时间取到达时刻，丢帧只会拉长上一帧。录制中 AppDelegate 把菜单栏图标换成停止按钮（`GIFRecorder.didChange`）。自检 `gif` 用 `capturesScreen: false` 注入合成帧，不需要屏幕录制权限；真实录屏路径只能手动验证。
 - **FeatureChecks.swift + CaptureHarness.swift**：离屏窗口加模拟事件的自检。未打包运行时，开始前会清空本进程的 UserDefaults 域，保证互不影响。新增交互功能时在这里加对应的检查，也就是用户说的“自检”。
 
 ## 发布与仓库

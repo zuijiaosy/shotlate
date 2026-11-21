@@ -3,6 +3,7 @@ import Carbon.HIToolbox
 import CoreImage
 import ShotlateCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Scripted behaviour checks that need AppKit (windows, pasteboard, rendering) and so can't live in ShotlateCore's tests.
 /// Each check prints PASS/FAIL lines and the process exits non-zero if any expectation failed.
@@ -36,6 +37,8 @@ enum FeatureChecks {
         ("toolbar-keys", toolbarKeys),
         ("ocr", ocr),
         ("scroll-result-keys", scrollResultKeys),
+        ("gif", gifRecording),
+        ("gif-result-keys", gifResultKeys),
         ("secret-file", secretFile),
         ("updater", updater),
     ]
@@ -772,5 +775,178 @@ enum FeatureChecks {
         expect(UserDefaults.standard.object(forKey: "SUEnableAutomaticChecks") as? Bool == false, "turning them off is saved at once, under Sparkle's key")
         model.automaticallyChecksForUpdates = true
         expect(Updater.shared.automaticallyChecks, "and turning them back on too")
+    }
+}
+
+// MARK: - GIF recording
+
+extension FeatureChecks {
+    /// A 32BGRA frame of one color with a `mark`-colored square at `markAt`, like the stream delivers.
+    @MainActor static func gifFrame(_ width: Int, _ height: Int, color: UInt32, mark: UInt32? = nil, markAt: CGPoint = .zero) -> CVPixelBuffer? {
+        var buffer: CVPixelBuffer?
+        guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, nil, &buffer) == kCVReturnSuccess, let buffer,
+              CVPixelBufferLockBaseAddress(buffer, []) == kCVReturnSuccess, let base = CVPixelBufferGetBaseAddress(buffer)
+        else { return nil }
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        for y in 0..<height {
+            let row = (base + y * rowBytes).assumingMemoryBound(to: UInt32.self)
+            for x in 0..<width {
+                let inMark = mark != nil && x >= Int(markAt.x) && x < Int(markAt.x) + 10 && y >= Int(markAt.y) && y < Int(markAt.y) + 10
+                row[x] = 0xFF00_0000 | (inMark ? mark! : color)
+            }
+        }
+        return buffer
+    }
+
+    /// Colors (0xRRGGBB) of a pixel in every frame of a GIF file, as ImageIO composes them.
+    @MainActor static func gifPixels(_ url: URL, x: Int, y: Int) -> (size: CGSize, colors: [UInt32])? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        var size = CGSize.zero
+        let colors = (0..<CGImageSourceGetCount(source)).compactMap { i -> UInt32? in
+            guard let image = CGImageSourceCreateImageAtIndex(source, i, nil) else { return nil }
+            size = CGSize(width: image.width, height: image.height)
+            var px = [UInt8](repeating: 0, count: 4)
+            guard let ctx = CGContext(data: &px, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+            else { return nil }
+            // Draw so that pixel (x, y) from the top lands on the context's only pixel.
+            ctx.draw(image, in: CGRect(x: -x, y: -(image.height - 1 - y), width: image.width, height: image.height))
+            return UInt32(px[0]) << 16 | UInt32(px[1]) << 8 | UInt32(px[2])
+        }
+        return (size, colors)
+    }
+
+    /// Records synthetic frames through the real recorder (no screen stream) and checks the file and every way it ends.
+    @MainActor static func gifRecording() async {
+        expect(ToolbarAction.action(forKey: "g").map { if case .recordGIF = $0 { return true } else { return false } } == true,
+               "G records a GIF")
+        guard let screen = NSScreen.main else { return expect(false, "a screen") }
+        let visible = screen.visibleFrame
+        let rect = CGRect(x: visible.midX - 60, y: visible.midY - 40, width: 120, height: 80)
+
+        func record(_ body: (GIFRecorder) async -> Void) async -> URL? {
+            guard let recorder = GIFRecorder.start(rect: rect, screen: screen, capturesScreen: false) else { return nil }
+            var result: URL?
+            recorder.onFinished = { result = $0 }
+            await body(recorder)
+            for _ in 0..<100 where result == nil && GIFRecorder.current == nil { try? await Task.sleep(for: .milliseconds(20)) }
+            return result
+        }
+
+        // Frames: gray; gray again (merged); gray with a red square; then one after stopping (dropped).
+        var folder: URL?
+        let url = await record { recorder in
+            folder = recorder.fileURL.deletingLastPathComponent()
+            expect(GIFRecorder.current === recorder, "the recorder is current while recording")
+            expect(GIFRecorder.start(rect: rect, screen: screen, capturesScreen: false) == nil, "a second recording can't start meanwhile")
+            expect(recorder.pixelWidth == 120 && recorder.pixelHeight == 80, "recorded at one pixel per point")
+            let t = CACurrentMediaTime()
+            recorder.ingest(gifFrame(120, 80, color: 0x808080)!, time: t)
+            await recorder.testing_waitForEncoder()
+            recorder.ingest(gifFrame(120, 80, color: 0x808080)!, time: t + 0.1)
+            await recorder.testing_waitForEncoder()
+            recorder.ingest(gifFrame(120, 80, color: 0x808080, mark: 0xFF0000, markAt: CGPoint(x: 50, y: 30))!, time: t + 0.2)
+            await recorder.testing_waitForEncoder()
+            recorder.testing_panel.setElapsed(73.4)
+            expect(recorder.testing_panel.testing_time == "1:13", "the panel shows the elapsed time")
+            if let view = recorder.testing_panel.contentView, let rep = render(view) { write(rep, "gif-panel.png") }
+            recorder.stop(endTime: t + 0.7)
+            recorder.ingest(gifFrame(120, 80, color: 0x0000FF)!, time: t + 0.8)
+            expect(GIFRecorder.current == nil, "stopping ends the recording at once")
+        }
+        if let url, let read = gifPixels(url, x: 55, y: 35) {
+            expect(read.size == CGSize(width: 120, height: 80), "the GIF is the region's size (\(read.size))")
+            expect(read.colors == [0x808080, 0xFF0000], "identical frames merge and the late frame is dropped (\(read.colors.map { String($0, radix: 16) }))")
+            let source = CGImageSourceCreateWithURL(url as CFURL, nil)
+            let delays = (0..<2).map { i -> Double in
+                let props = source.flatMap { CGImageSourceCopyPropertiesAtIndex($0, i, nil) } as? [CFString: Any]
+                let gif = props?[kCGImagePropertyGIFDictionary] as? [CFString: Any]
+                return (gif?[kCGImagePropertyGIFUnclampedDelayTime] as? Double) ?? -1
+            }
+            expect(abs(delays[0] - 0.2) < 0.001 && abs(delays[1] - 0.5) < 0.001, "delays follow the frames' times (\(delays))")
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+        } else {
+            expect(false, "stopping writes a readable GIF")
+        }
+
+        // Nothing recorded: no file is left behind.
+        let empty = await record { recorder in
+            folder = recorder.fileURL.deletingLastPathComponent()
+            recorder.stop()
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        expect(empty == nil && !FileManager.default.fileExists(atPath: folder!.path), "stopping before any frame keeps no file")
+
+        // Cancel discards the file.
+        let cancelled = await record { recorder in
+            folder = recorder.fileURL.deletingLastPathComponent()
+            recorder.ingest(gifFrame(120, 80, color: 0x00FF00)!, time: CACurrentMediaTime())
+            await recorder.testing_waitForEncoder()
+            recorder.cancel()
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        expect(cancelled == nil && !FileManager.default.fileExists(atPath: folder!.path), "cancel discards the recording")
+
+        // The time limit stops it by itself, keeping what was recorded.
+        let limited = await record { recorder in
+            recorder.maxDuration = 0.3
+            recorder.ingest(gifFrame(120, 80, color: 0x00FF00)!, time: CACurrentMediaTime())
+            try? await Task.sleep(for: .milliseconds(800))
+            expect(GIFRecorder.current == nil, "the time limit ends the recording")
+        }
+        expect(limited.flatMap { gifPixels($0, x: 1, y: 1)?.colors } == [0x00FF00], "and keeps what was recorded")
+        if let limited { try? FileManager.default.removeItem(at: limited.deletingLastPathComponent()) }
+    }
+
+    /// The result window copies the GIF as a file and as GIF data, saves it, and discards it on close.
+    @MainActor static func gifResultKeys() async {
+        guard let screen = NSScreen.main else { return expect(false, "a screen") }
+        func makeGIF() -> GIFInfo? {
+            let folder = GIFRecorder.temporaryFolder.appendingPathComponent(UUID().uuidString)
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = folder.appendingPathComponent("Shotlate check.gif")
+            var data = Data()
+            guard let encoder = try? GIFEncoder(width: 200, height: 120, sink: { data.append($0) }) else { return nil }
+            for i in 0..<10 {
+                var pixels = [UInt32](repeating: 0xFFF0_F0F0, count: 200 * 120)
+                for y in 40..<80 { for x in (i * 16)..<(i * 16 + 40) { pixels[y * 200 + x] = 0xFF29_94ED } }
+                _ = try? encoder.add(pixels, time: Double(i) * 0.1)
+            }
+            try? encoder.finish(endTime: 1)
+            guard (try? data.write(to: url)) != nil else { return nil }
+            return GIFInfo(url: url, width: 200, height: 120, frames: 10, duration: 1, bytes: data.count)
+        }
+        func open() -> GIFResultWindow? {
+            guard let info = makeGIF() else { return nil }
+            GIFResultWindow.show(info, on: screen)
+            return GIFResultWindow.testing_open.last
+        }
+
+        NSPasteboard.general.clearContents()
+        guard let w1 = open() else { return expect(false, "result window opens") }
+        if let view = w1.contentView, let rep = render(view) { write(rep, "gif-result.png") }
+        key(w1, "c", code: 8)
+        let gifType = NSPasteboard.PasteboardType(UTType.gif.identifier)
+        let pasted = NSPasteboard.general.string(forType: .fileURL).flatMap(URL.init(string:))
+        expect(NSPasteboard.general.data(forType: gifType).map { $0.starts(with: Array("GIF89a".utf8)) } == true, "C copies the GIF data")
+        expect(pasted == w1.info.url && FileManager.default.fileExists(atPath: w1.info.url.path), "and the file, which stays for pasting")
+        expect(!w1.isVisible, "and closes the window")
+        try? FileManager.default.removeItem(at: w1.info.url.deletingLastPathComponent())
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("shotlate-gif-keys-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let previous = Settings.shared.saveDirectory
+        Settings.shared.saveDirectory = directory
+        defer { Settings.shared.saveDirectory = previous; try? FileManager.default.removeItem(at: directory) }
+        guard let w2 = open() else { return expect(false, "result window opens") }
+        key(w2, "s", code: 1)
+        let saved = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        expect(saved == ["Shotlate check.gif"] && !w2.isVisible, "S saves it to the save folder (\(saved))")
+        expect(!FileManager.default.fileExists(atPath: w2.info.url.path), "and the temporary file is removed")
+
+        guard let w3 = open() else { return expect(false, "result window opens") }
+        key(w3, "\u{1b}", code: 53)
+        expect(!w3.isVisible && !FileManager.default.fileExists(atPath: w3.info.url.path), "Esc closes it and discards the file")
     }
 }

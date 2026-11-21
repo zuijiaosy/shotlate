@@ -502,14 +502,15 @@ extension PixelBuffer {
 }
 
 /// Dashed outline drawn just outside the captured region; orange while stitching has lost track.
-private final class DashedFrameView: NSView {
+final class DashedFrameView: NSView {
+    var color = selectionBlue { didSet { needsDisplay = true } }
     var isLost = false { didSet { needsDisplay = true } }
 
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(rect: bounds.insetBy(dx: 2, dy: 2))
         path.lineWidth = 2
         path.setLineDash([6, 4], count: 2, phase: 0)
-        (isLost ? NSColor.systemOrange : selectionBlue).setStroke()
+        (isLost ? NSColor.systemOrange : color).setStroke()
         path.stroke()
     }
 }

@@ -1309,6 +1309,8 @@ final class CaptureView: NSView {
             if mode == .pinEdit { finish(.apply) } else { pinSelection() }
         case .longCapture:
             if mode == .screenshot { startLongCapture() } else { showToast("这里不能长截图") }
+        case .recordGIF:
+            if mode == .screenshot { startGIFRecording() } else { showToast("这里不能录制 GIF") }
         case .cancel:
             session?.cancel()
         case .save:
@@ -1506,6 +1508,22 @@ final class CaptureView: NSView {
         StyleMemory.lastSelection[displayID] = selection
         session?.finish()
         ScrollCaptureController.start(rect: rect, screen: screen)
+    }
+
+    /// Records the selected region as a GIF. Annotations are not carried over.
+    private func startGIFRecording() {
+        guard hasSelection, let rect = selectionOnScreen, let screen = window?.screen else { return }
+        guard GIFRecorder.current == nil else {
+            showToast("正在录制另一个 GIF")
+            return
+        }
+        guard selection.width >= 20, selection.height >= 20 else {
+            showToast("选区太小了，录制 GIF 需要至少 20 × 20")
+            return
+        }
+        StyleMemory.lastSelection[displayID] = selection
+        session?.finish()
+        GIFRecorder.start(rect: rect, screen: screen)
     }
 
     /// Bakes the annotations into the pin; ⌘C and ⌘S also copy or save the result.

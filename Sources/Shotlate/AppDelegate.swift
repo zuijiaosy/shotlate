@@ -3,6 +3,8 @@ import ShotlateCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
+    private var menu: NSMenu!
+    private var recordingTimer: Timer?
     private var captureItem: NSMenuItem!
     private var pinClipboardItem: NSMenuItem!
     private var closePinsItem: NSMenuItem!
@@ -21,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         image?.isTemplate = true
         statusItem.button?.image = image
 
-        let menu = NSMenu()
+        menu = NSMenu()
         menu.delegate = self
         updateReadyItem = item("", #selector(checkForUpdates))
         updateReadyItem.isHidden = true
@@ -62,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         center.addObserver(forName: Settings.didChange, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
         center.addObserver(forName: .pauseHotKeys, object: nil, queue: .main) { _ in HotKeyCenter.shared.unregisterAll() }
         center.addObserver(forName: .resumeHotKeys, object: nil, queue: .main) { [weak self] _ in self?.registerHotKeys() }
+        center.addObserver(forName: GIFRecorder.didChange, object: nil, queue: .main) { [weak self] _ in self?.updateRecordingStatus() }
 
         TextRecognizer.warmUp()
         Updater.shared.start()
@@ -80,7 +83,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func registerHotKeys() {
         let settings = Settings.shared
         let capture = settings.shortcut
-        let ok = HotKeyCenter.shared.register(.capture, shortcut: capture) { CaptureSession.begin() }
+        // While a GIF is recording, the capture shortcut stops it.
+        let ok = HotKeyCenter.shared.register(.capture, shortcut: capture) {
+            if let recorder = GIFRecorder.current { recorder.stop() } else { CaptureSession.begin() }
+        }
         captureItem.title = ok ? "截图（\(capture.displayString)）" : "截图（快捷键 \(capture.displayString) 已被占用）"
 
         let pin = settings.pinClipboardShortcut
@@ -117,6 +123,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func checkForUpdates() { Updater.shared.checkForUpdates() }
+
+    /// While recording, the menu bar icon becomes a stop button showing the elapsed time.
+    private func updateRecordingStatus() {
+        guard let button = statusItem.button else { return }
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        if GIFRecorder.current != nil {
+            statusItem.menu = nil
+            button.target = self
+            button.action = #selector(stopRecording)
+            button.image = NSImage(systemSymbolName: "stop.circle", accessibilityDescription: "停止录制 GIF")
+            button.image?.isTemplate = true
+            button.imagePosition = .imageLeading
+            statusItem.length = NSStatusItem.variableLength
+            let update = { [weak button] in
+                let s = Int(GIFRecorder.current?.elapsed ?? 0)
+                button?.title = String(format: " %d:%02d", s / 60, s % 60)
+            }
+            update()
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in update() }
+        } else {
+            statusItem.menu = menu
+            button.action = nil
+            button.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Shotlate")
+            button.image?.isTemplate = true
+            resetStatusButton()
+        }
+    }
+
+    @objc private func stopRecording() { GIFRecorder.current?.stop() }
 
     @objc private func capture() {
         // Let the menu close before the screen is frozen.
