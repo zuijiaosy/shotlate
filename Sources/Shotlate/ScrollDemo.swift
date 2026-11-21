@@ -13,6 +13,11 @@ enum ScrollDemo {
 
     @MainActor
     static func run(output: URL, auto: Bool) {
+        // Without the permission the stream never starts and the demo window would wait forever.
+        guard CGPreflightScreenCaptureAccess() else {
+            FileHandle.standardError.write(Data("scroll demo needs Screen Recording permission for this terminal\n".utf8))
+            exit(1)
+        }
         guard let screen = NSScreen.main else { exit(1) }
         let visible = screen.visibleFrame
         let size = CGSize(width: 420, height: 440)

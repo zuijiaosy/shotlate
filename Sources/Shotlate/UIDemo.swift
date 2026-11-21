@@ -97,10 +97,11 @@ enum UIDemo {
         func type(_ text: String) {
             (window.firstResponder as? NSTextView)?.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
         }
+        // Captions open to the right of each number, so the numbers go where there's empty space beside them.
         key("7", code: 26)
-        click(CGPoint(x: 90, y: 110))
+        click(CGPoint(x: 265, y: 110))
         type("先框选区域")
-        click(CGPoint(x: 90, y: 250)) // ends the caption and places the next number
+        click(CGPoint(x: 305, y: 250)) // ends the caption and places the next number
         type("再点这里")
         shot("numbers")
         key("\u{1b}", code: 53) // commit the caption
@@ -138,7 +139,8 @@ enum UIDemo {
         for _ in 0..<200 where view.testing_ocrText == nil { await pump(0.25) }
         shot("ocr-panel")
         key("\u{1b}", code: 53) // close the OCR panel
-        Settings.shared.apiKey.isEmpty ? key("y", code: 16) : ()
+        // Only the model engine needs a key; with the free engine Y would really go online and translate.
+        if Settings.shared.engine == .llm, Settings.shared.apiKey.isEmpty { key("y", code: 16) }
         await pump(0.1)
         shot("translate-without-key")
 
@@ -150,7 +152,9 @@ enum UIDemo {
         drag(CGPoint(x: 540, y: 285), CGPoint(x: 690, y: 330))
         key("\u{1b}", code: 53)
         key("\u{1b}", code: 53)
-        click(CGPoint(x: 90, y: 110))
+        click(CGPoint(x: 265, y: 110))
+        key("", code: 51)
+        click(CGPoint(x: 320, y: 110)) // and its caption, a text item of its own
         key("", code: 51)
         shot("blur-mosaic-renumbered")
 
