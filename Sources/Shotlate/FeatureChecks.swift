@@ -529,8 +529,8 @@ enum FeatureChecks {
         model.scanCodeShortcut = nil
         center.unregisterAll()
 
-        // The free engine is the default and needs no key; the LLM engine is one pick away.
-        expect(model.engine == .free && Settings.shared.translationConfig.engine == .free, "translation starts on the free engine, without an API key")
+        // Bilibili's free engine is the default and needs no key; the LLM engine is one pick away.
+        expect(model.engine == .bilibili && Settings.shared.translationConfig.engine == .bilibili, "translation starts on the Bilibili engine, without an API key")
         expect(!Settings.shared.translationConfig.clientKey.isEmpty && Settings.shared.clientKey == Settings.shared.clientKey, "the free engine gets a stable per-install client key")
         model.engine = .llm
         expect(Settings.shared.engine == .llm, "picking the LLM engine saves at once")
@@ -546,7 +546,7 @@ enum FeatureChecks {
                 write(rep, "settings-translate-\(engine.rawValue).png")
             }
         }
-        model.engine = .free
+        model.engine = .bilibili
 
         // Every pane, rendered offscreen for a look (without reading the API key).
         for pane in SettingsPane.allCases {

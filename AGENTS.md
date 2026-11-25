@@ -70,7 +70,12 @@ docs/images/            README 用的动图和截图
 - **Chrome.swift**：工具栏 `ToolbarView`、悬停卡片 `HoverCardView`、单键快捷键 `ToolbarKeys`（UserDefaults `toolbar.keys`，只存改过的）、样式条、选区上方的尺寸条、OCR 结果面板。`ToolbarAction.action(forKey:)` 决定单键按下时触发哪个按钮。
 - **Recognition.swift**：Vision 文字识别（截图的 OCR / 翻译共用一次结果，贴图文字选择走 `layout`）、译文排版 `TranslationLayout`、扫码 `CodeScanner`、贴图翻译 `ImageTranslator`。
 - **Pin.swift**：`PinManager`（全部贴图、隐藏 / 显示）、`PinWindow`（缩放、透明度、翻译、复制保存）、`PinView`（拖动、文字选择、右键菜单）。
-- **翻译引擎**（Translator.swift）：`Translator.translate` 按 `TranslationConfig.engine` 分发。默认 `FreeTranslator`（腾讯 TranSmart `transmart.qq.com/api/imt`，无 Key、非官方，一次发一批 `text_list`，单次约 5000 字符封顶所以按 4000 分批并发）；`ChatTranslator` 是用户自配的大模型。Google / 微软的免费接口不用：Google 在国内直连不通，Edge 的 auth 接口已 404。已有 api-key 文件的老用户默认 `.llm`。`--translate-image` 可用 `--engine free|llm` 指定。
+- **翻译引擎**（Translator.swift）：`Translator.translate` 按 `TranslationConfig.engine` 分发，分批、并发、合并的公共部分在 `WebTranslation`。新用户默认 `.bilibili`，已有 api-key 文件的老用户默认 `.llm`（只在没存过 `translate.engine` 时生效）。`--translate-image` 可用 `--engine free|google|bing|bilibili|llm` 指定。
+  - `.free` = `FreeTranslator`，腾讯 TranSmart（`transmart.qq.com/api/imt`，非官方），一次发一批 `text_list`，单次约 5000 字符封顶所以按 4000 分批。rawValue 叫 `free` 是历史原因（当时只有这一个免费引擎），已存的设置靠它，不要改名。
+  - `GoogleTranslator`：`clients5.google.com/translate_a/t?client=dict-chrome-ex`，POST 表单、每段一个 `q`，纯文本。国内要代理。`translate.googleapis.com` 的 `client=gtx` 容易 429，不用。
+  - `BingTranslator`：先 GET `www.bing.com/translator` 从页面取 IG / IID / key / token（国内会跳到 cn.bing.com，token 只认签发它的域名），再 POST `/ttranslatev3`，必须带 Referer，否则 200 空响应。一次只收一段文字（5000 字符），所以按换行拼接再拆开，行数对不上就逐段重发。直连时 token 可以复用约一小时；走代理时常随机 401，所以最多试 3 次。Edge 的 `edge.microsoft.com/translate/auth` 已 404，不用。
+  - `BilibiliTranslator`：B站官方免费公开的 Index-Translate（`index-translate.bilibili.com/v1`，OpenAI 兼容，无 Key，模型 `Index-Translate-35B-A3B`，要传 `chat_template_kwargs.enable_thinking=false`）。多段用模型自己的 JSON 指令格式一次发（提示词照搬官方 `call_api.py`），回复不是 JSON 时逐段重发。
+  - `ChatTranslator` 是用户自配的大模型。
 - **Settings.swift**：设置都在 UserDefaults（域 `app.shotlate.Shotlate`）；翻译 API Key 存 `~/Library/Application Support/Shotlate/api-key`（权限 600，**不用钥匙串**，因为每次重新签名都会弹密码框）。未打包运行（`.build/debug/Shotlate`）时 Key 只读环境变量 `DEEPSEEK_API_KEY`，从不碰真实配置。
 - **SettingsWindow.swift**：`SettingsModel` 的每个属性 `didSet` 立即写入 Settings；改全局快捷键会发 `Settings.didChange`，AppDelegate 重新注册（HotKey.swift，Carbon，不需要辅助功能权限）。
 - **Updater.swift**：包一层 Sparkle 的 `SPUStandardUpdaterController`。菜单栏应用没有 Dock 图标，所以开了“温和提醒”：定时检查发现新版时不弹窗，只让 AppDelegate 在菜单顶部显示「有新版本 …」，点了才弹 Sparkle 的窗口。只在打包的 .app 里启动；`.build/debug` 和自检不碰 Sparkle。Sparkle 的配置在 Info.plist 的 `SU*` 键里。

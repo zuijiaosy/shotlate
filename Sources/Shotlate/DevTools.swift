@@ -3,7 +3,7 @@ import ShotlateCore
 
 /// Command-line entry points for checking OCR and in-place translation without the capture UI.
 ///
-///   Shotlate --translate-image input.png output.png [--scale 2] [--engine free|llm]
+///   Shotlate --translate-image input.png output.png [--scale 2] [--engine free|google|bing|bilibili|llm]
 ///
 /// Uses the API key from DEEPSEEK_API_KEY. Without a key it substitutes
 /// placeholder translations so layout and rendering can still be checked.
@@ -129,7 +129,7 @@ enum DevTools {
         } else {
             let started = Date()
             translations = try wait { try await Translator.translate(items, config: config) }
-            print(String(format: "Translated with %@ in %.1fs", config.engine == .free ? "free" : config.model, Date().timeIntervalSince(started)))
+            print(String(format: "Translated with %@ in %.1fs", config.engine == .llm ? config.model : config.engine.rawValue, Date().timeIntervalSince(started)))
         }
         for (id, text) in translations.sorted(by: { $0.key < $1.key }) { print("  #\(id) → \(text)") }
 

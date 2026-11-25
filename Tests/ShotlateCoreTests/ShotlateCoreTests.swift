@@ -570,17 +570,17 @@ import Testing
 
     @Test func batchesStayUnderLimitAndKeepOrder() {
         let items = (0..<5).map { item($0, 1500) }
-        let batches = FreeTranslator.batches(items)
+        let batches = WebTranslation.batches(items, limit: 4000)
         #expect(batches.map { $0.map(\.id) } == [[0, 1], [2, 3], [4]])
     }
 
     @Test func batchAtExactLimitStaysTogether() {
-        #expect(FreeTranslator.batches([item(0, 2000), item(1, 2000)]).count == 1)
-        #expect(FreeTranslator.batches([item(0, 2000), item(1, 2001)]).count == 2)
+        #expect(WebTranslation.batches([item(0, 2000), item(1, 2000)], limit: 4000).count == 1)
+        #expect(WebTranslation.batches([item(0, 2000), item(1, 2001)], limit: 4000).count == 2)
     }
 
     @Test func overlongItemIsSplitWithoutLosingText() {
-        let batches = FreeTranslator.batches([item(0, 10), item(1, 9000), item(2, 10)])
+        let batches = WebTranslation.batches([item(0, 10), item(1, 9000), item(2, 10)], limit: 4000)
         #expect(batches.map { $0.map(\.id) } == [[0], [1], [1], [1, 2]])
         #expect(batches.allSatisfy { $0.reduce(0) { $0 + $1.text.utf16.count } <= 4000 })
         #expect(batches.flatMap { $0 }.filter { $0.id == 1 }.map(\.text).joined() == item(1, 9000).text)
@@ -588,7 +588,7 @@ import Testing
 
     @Test func unicodeChunksStayWithinServiceLimit() {
         let text = String(repeating: "中😀e\u{301}", count: 2000)
-        let chunks = FreeTranslator.batches([.init(id: 42, text: text)]).flatMap { $0 }
+        let chunks = WebTranslation.batches([.init(id: 42, text: text)], limit: 4000).flatMap { $0 }
         #expect(chunks.allSatisfy { $0.text.utf16.count <= 4000 && $0.id == 42 })
         #expect(chunks.map(\.text).joined() == text)
     }
@@ -642,6 +642,10 @@ import Testing
         #expect(TranslationCache.key("x", a) == TranslationCache.key("x", b))
         a.engine = .llm
         #expect(TranslationCache.key("x", a) != TranslationCache.key("x", b))
+        b.engine = .google
+        var c = b
+        c.engine = .bing
+        #expect(TranslationCache.key("x", b) != TranslationCache.key("x", c))
     }
 }
 
@@ -651,18 +655,7 @@ private final class FreeTranslationProtocol: URLProtocol {
 
     override func startLoading() {
         do {
-            var data = request.httpBody ?? Data()
-            if let stream = request.httpBodyStream {
-                stream.open()
-                defer { stream.close() }
-                var buffer = [UInt8](repeating: 0, count: 4096)
-                while true {
-                    let count = stream.read(&buffer, maxLength: buffer.count)
-                    if count < 0 { throw stream.streamError ?? URLError(.cannotDecodeContentData) }
-                    if count == 0 { break }
-                    data.append(contentsOf: buffer.prefix(count))
-                }
-            }
+            let data = try bodyData(of: request)
             let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
             let source = try #require(body["source"] as? [String: Any])
             let texts = try #require(source["text_list"] as? [String])
@@ -674,6 +667,171 @@ private final class FreeTranslationProtocol: URLProtocol {
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: try JSONSerialization.data(withJSONObject: responseBody))
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+/// URLProtocol hands over POST bodies as a stream.
+private func bodyData(of request: URLRequest) throws -> Data {
+    var data = request.httpBody ?? Data()
+    if let stream = request.httpBodyStream {
+        stream.open()
+        defer { stream.close() }
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count < 0 { throw stream.streamError ?? URLError(.cannotDecodeContentData) }
+            if count == 0 { break }
+            data.append(contentsOf: buffer.prefix(count))
+        }
+    }
+    return data
+}
+
+private func formFields(_ data: Data) -> [(String, String)] {
+    String(decoding: data, as: UTF8.self).split(separator: "&").map { pair in
+        let parts = pair.split(separator: "=", maxSplits: 1).map { $0.removingPercentEncoding ?? "" }
+        return (parts[0], parts.count > 1 ? parts[1] : "")
+    }
+}
+
+@Suite struct WebEngineTests {
+    let config = TranslationConfig(baseURL: "", model: "", apiKey: "", targetLanguage: "English")
+
+    func session() -> URLSession {
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.protocolClasses = [WebEngineProtocol.self]
+        return URLSession(configuration: sessionConfig)
+    }
+
+    func translate(_ engine: TranslationEngine, _ texts: [String]) async throws -> [Int: String] {
+        var config = self.config
+        config.engine = engine
+        let session = session()
+        defer { session.invalidateAndCancel() }
+        return try await Translator.translate(texts.enumerated().map { .init(id: $0, text: $1) }, config: config, session: session)
+    }
+
+    @Test func onlyTheLLMNeedsAKey() {
+        #expect(TranslationEngine.allCases.filter(\.needsAPIKey) == [.llm])
+        #expect(TranslationEngine(rawValue: "free") == .free, "settings saved before the other free engines still load")
+    }
+
+    @Test func googleSendsOneFieldPerText() throws {
+        let request = GoogleTranslator.makeRequest(texts: ["a&b=c", "中文 +"], config: config)
+        #expect(request.httpMethod == "POST")
+        #expect(request.url?.query?.contains("tl=en") == true)
+        #expect(formFields(try bodyData(of: request)).map { "\($0)=\($1)" } == ["q=a&b=c", "q=中文 +"])
+        #expect(["简体中文", "繁體中文", "English", "日本語", "한국어"].map(GoogleTranslator.languageCode) == ["zh-CN", "zh-TW", "en", "ja", "ko"])
+    }
+
+    @Test func googleParsesBothResponseShapes() throws {
+        #expect(try GoogleTranslator.parseResponse(Data(#"[["设置","en"],["打开","en"]]"#.utf8), expected: 2) == ["设置", "打开"])
+        #expect(try GoogleTranslator.parseResponse(Data(#"["设置"]"#.utf8), expected: 1) == ["设置"])
+        #expect(throws: TranslationError.badResponse("译文数量与原文不一致")) {
+            try GoogleTranslator.parseResponse(Data(#"[["设置","en"]]"#.utf8), expected: 2)
+        }
+    }
+
+    @Test func googleTranslates() async throws {
+        #expect(try await translate(.google, ["open", "save"]) == [0: "OPEN", 1: "SAVE"])
+    }
+
+    @Test func bingReadsTokenFromPage() {
+        let html = #"_G={IG:"ABC123",x:1}; <div data-iid="translator.5023"> var params_AbusePreventionHelper = [1795620682889,"tok-en_1",3600000];"#
+        let now = Date(timeIntervalSince1970: 0)
+        let token = BingTranslator.parseToken(html: html, host: "cn.bing.com", now: now)
+        #expect(token == .init(host: "cn.bing.com", ig: "ABC123", iid: "translator.5023", key: "1795620682889", token: "tok-en_1",
+                               expires: now.addingTimeInterval(3540)))
+        #expect(BingTranslator.parseToken(html: "<html></html>", host: "cn.bing.com") == nil)
+    }
+
+    @Test func bingRequestCarriesTokenAndReferer() throws {
+        let token = BingTranslator.Token(host: "cn.bing.com", ig: "IG1", iid: "translator.5023", key: "1", token: "t", expires: .distantFuture)
+        let request = BingTranslator.makeRequest(text: "hi", token: token, config: config)
+        #expect(request.url?.absoluteString == "https://cn.bing.com/ttranslatev3?isVertical=1&IG=IG1&IID=translator.5023.1")
+        #expect(request.value(forHTTPHeaderField: "Referer") == "https://cn.bing.com/translator")
+        let fields = Dictionary(uniqueKeysWithValues: formFields(try bodyData(of: request)))
+        #expect(fields["to"] == "en" && fields["text"] == "hi" && fields["token"] == "t" && fields["key"] == "1")
+    }
+
+    @Test func bingParsesResponse() throws {
+        #expect(try BingTranslator.parseResponse(Data(#"[{"translations":[{"text":"你好","to":"zh-Hans"}]}]"#.utf8)) == "你好")
+        #expect(try BingTranslator.parseResponse(Data(#"{"statusCode":205,"errorMessage":""}"#.utf8)) == nil)
+        #expect(try BingTranslator.parseResponse(Data()) == nil)
+    }
+
+    @Test func bingJoinsLinesAndFallsBackWhenTheyMerge() async throws {
+        #expect(try await translate(.bing, ["file", "edit\nview"]) == [0: "FILE", 1: "EDIT VIEW"])
+        // The mock merges any joined text containing "merge"; each line is then translated on its own.
+        #expect(try await translate(.bing, ["merge me", "and me", "too"]) == [0: "MERGE ME", 1: "AND ME", 2: "TOO"])
+    }
+
+    @Test func bilibiliPromptsInTheModelsFormat() {
+        #expect(BilibiliTranslator.prompt(texts: ["Hi"], targetLanguage: "简体中文") == "请将以下文本翻译为简体中文，直接输出翻译结果，不要进行任何解释。\n\nHi")
+        let batch = BilibiliTranslator.prompt(texts: (0..<11).map { "t\($0) \"q\"" }, targetLanguage: "日本語")
+        #expect(batch.hasPrefix("请将以下文本翻译成日语"))
+        #expect(batch.contains(#"{"0": "t0 \"q\"", "1": "t1 \"q\""#) && batch.contains(#""10": "t10 \"q\""}"#))
+    }
+
+    @Test func bilibiliParsesBatchReplies() throws {
+        #expect(BilibiliTranslator.parseBatch(#"{"0": "设置", "1": "打开"}"#, expected: 2) == ["设置", "打开"])
+        #expect(BilibiliTranslator.parseBatch("```json\n{\"1\": \"打开\"}\n```", expected: 2) == ["", "打开"])
+        #expect(BilibiliTranslator.parseBatch("设置，打开", expected: 2) == nil)
+        let reply = #"{"choices":[{"message":{"content":"<think>\n</think>\n\n设置"}}]}"#
+        #expect(try BilibiliTranslator.content(Data(reply.utf8)) == "设置")
+    }
+
+    @Test func bilibiliTranslatesBatchesAndFallsBack() async throws {
+        #expect(try await translate(.bilibili, ["open", "save"]) == [0: "OPEN", 1: "SAVE"])
+        #expect(try await translate(.bilibili, ["solo"]) == [0: "SOLO"])
+        // A batch reply that is not JSON is retried one paragraph at a time.
+        #expect(try await translate(.bilibili, ["no json", "here"]) == [0: "NO JSON", 1: "HERE"])
+    }
+}
+
+/// Fakes the Google, Bing and Bilibili endpoints well enough to exercise batching and fallbacks.
+private final class WebEngineProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        do {
+            let url = request.url!
+            let data = try bodyData(of: request)
+            let body: Data
+            switch (url.host ?? "", url.path) {
+            case ("clients5.google.com", _):
+                let texts = formFields(data).filter { $0.0 == "q" }.map(\.1)
+                body = try JSONSerialization.data(withJSONObject: texts.map { [$0.uppercased(), "en"] })
+            case ("www.bing.com", "/translator"):
+                body = Data(#"IG:"AB12" data-iid="translator.1" params_AbusePreventionHelper = [1,"tok",3600000]"#.utf8)
+            case ("www.bing.com", "/ttranslatev3"):
+                var text = Dictionary(uniqueKeysWithValues: formFields(data))["text"] ?? ""
+                if text.contains("merge"), text.contains("\n") { text = text.replacingOccurrences(of: "\n", with: " ") }
+                body = try JSONSerialization.data(withJSONObject: [["translations": [["text": text.uppercased()]]]])
+            case ("index-translate.bilibili.com", _):
+                let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let prompt = try #require((json["messages"] as? [[String: Any]])?.first?["content"] as? String)
+                let reply: String
+                if let start = prompt.range(of: "【源文】\n"), let end = prompt.range(of: "\n\n【约束要求】") {
+                    let source = String(prompt[start.upperBound..<end.lowerBound])
+                    reply = source.contains("no json") ? "not json" : source.uppercased()
+                } else {
+                    reply = prompt.components(separatedBy: "\n\n").last!.uppercased()
+                }
+                body = try JSONSerialization.data(withJSONObject: ["choices": [["message": ["content": reply]]]])
+            default:
+                throw URLError(.unsupportedURL)
+            }
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
             client?.urlProtocolDidFinishLoading(self)
         } catch {
             client?.urlProtocol(self, didFailWithError: error)

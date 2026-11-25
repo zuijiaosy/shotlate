@@ -1397,7 +1397,7 @@ final class CaptureView: NSView {
         }
 
         let config = Settings.shared.translationConfig
-        guard config.engine == .free || !config.apiKey.isEmpty else {
+        guard !config.engine.needsAPIKey || !config.apiKey.isEmpty else {
             showToast("还没有填写 API Key。请按 Esc 退出截图，在菜单栏 Shotlate → 设置 中填写。", duration: 5)
             return
         }

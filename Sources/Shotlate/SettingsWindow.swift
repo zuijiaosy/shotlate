@@ -245,8 +245,9 @@ struct SettingsView: View {
     private var translate: some View {
         Section {
             Picker("翻译引擎", selection: $model.engine) {
-                Text("免费翻译").tag(TranslationEngine.free)
-                Text("大模型").tag(TranslationEngine.llm)
+                ForEach(TranslationEngine.allCases, id: \.self) { engine in
+                    Text(engine.needsAPIKey ? engine.displayName : "\(engine.displayName)（免费）").tag(engine)
+                }
             }
             if model.engine == .llm {
                 TextField("Base URL", text: $model.baseURL, prompt: Text(TranslationConfig.defaultBaseURL))
@@ -270,11 +271,19 @@ struct SettingsView: View {
                     .textSelection(.enabled)
             }
         } footer: {
-            Text(model.engine == .free
-                 ? "免费翻译使用腾讯交互翻译，不需要任何配置，速度快。想要更自然、更懂上下文的译文，可以改用大模型。发送给翻译服务的只有识别出的文字，截图本身不会上传。"
-                 : "使用 OpenAI 兼容接口，默认是 DeepSeek 的 deepseek-flash。API Key 保存在本机的 ~/Library/Application Support/Shotlate/api-key，只有你的账户能读取。发送给翻译服务的只有识别出的文字，截图本身不会上传。")
+            Text(Self.translateFooter(model.engine) + "发送给翻译服务的只有识别出的文字，截图本身不会上传。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private static func translateFooter(_ engine: TranslationEngine) -> String {
+        switch engine {
+        case .free: return "腾讯交互翻译的网页接口，不需要任何配置，国内速度快。"
+        case .google: return "谷歌翻译的网页接口，不需要配置。国内需要开启代理才能连上（跟随系统代理）。"
+        case .bing: return "必应翻译的网页接口，不需要配置，国内可以直连。"
+        case .bilibili: return "B站开源的 Index-Translate 翻译模型的免费公开接口，不需要配置，译文更自然，速度比其他免费引擎慢一些。"
+        case .llm: return "使用 OpenAI 兼容接口，默认是 DeepSeek 的 deepseek-flash。API Key 保存在本机的 ~/Library/Application Support/Shotlate/api-key，只有你的账户能读取。"
         }
     }
 
