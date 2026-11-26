@@ -7,7 +7,7 @@
 - 文字识别使用系统自带的 Vision 框架，在本机完成。
 - 翻译默认使用 macOS 自带的系统翻译（macOS 26 及以上），在本机完成、不联网；没下载语言包或系统较旧时自动改用 B站 Index-Translate 的免费接口。还可以换成腾讯、谷歌、必应的免费接口，或者 OpenAI 兼容的大模型（如 DeepSeek 的 `deepseek-flash`）。联网引擎只发送识别出的文字，截图本身不上传。
 - 纯 Swift 编写，唯一的第三方依赖是负责自动更新的 [Sparkle](https://sparkle-project.org)。要求 macOS 14 或更高版本。
-- 小：安装包约 3.5 MB（Apple 芯片和 Intel 通用），常驻菜单栏时内存占用约 50 MB。
+- 小：安装包约 5.9 MB（Apple 芯片和 Intel 通用），常驻菜单栏静置时内存约 55 MB（使用后常驻约 70 MB 左右）。
 
 官网：[shotlate.pages.dev](https://shotlate.pages.dev) · 下载：[最新版本](https://github.com/zuijiaosy/shotlate/releases/latest)
 
@@ -19,9 +19,9 @@
 
 设置界面：左侧四个分类，改动立即生效。
 
-![活动监视器里的 Shotlate：内存 50.0 MB，4 个线程](docs/images/memory.png)
+![活动监视器里的 Shotlate：内存 54.6 MB，7 个线程](docs/images/memory.png)
 
-常驻菜单栏时的内存占用：活动监视器里约 50 MB，和一个 node 进程差不多。
+常驻菜单栏时的内存占用：静置约 55 MB（7 个线程），日常使用后常驻约 70 MB 左右。
 
 ## 构建
 
