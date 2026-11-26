@@ -1,63 +1,36 @@
 import AppKit
 import ShotlateCore
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
-    private var menu: NSMenu!
+    private var statusMenu: StatusMenu!
     private var recordingTimer: Timer?
-    private var captureItem: NSMenuItem!
-    private var pinClipboardItem: NSMenuItem!
-    private var closePinsItem: NSMenuItem!
-    private var togglePinsItem: NSMenuItem!
-    private var cancelDelayItem: NSMenuItem!
-    private var scanItem: NSMenuItem!
-    private var updateReadyItem: NSMenuItem!
-    private var checkUpdatesItem: NSMenuItem!
     private let countdown = Countdown()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Shotlate")
-        image?.isTemplate = true
-        statusItem.button?.image = image
+        statusItem.button?.image = BrandGlyph.image()
+        // Countdown and recording timers sit next to the icon; fixed-width digits keep it from jittering.
+        statusItem.button?.font = .monospacedDigitSystemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .regular)
 
-        menu = NSMenu()
-        menu.delegate = self
-        updateReadyItem = item("", #selector(checkForUpdates))
-        updateReadyItem.isHidden = true
-        menu.addItem(updateReadyItem)
-        captureItem = item("截图", #selector(capture))
-        menu.addItem(captureItem)
-        let delayItem = NSMenuItem(title: "延时截图", action: nil, keyEquivalent: "")
-        let delayMenu = NSMenu()
-        for seconds in [3, 5, 10] {
-            let i = item("\(seconds) 秒后", #selector(delayedCapture(_:)))
-            i.tag = seconds
-            delayMenu.addItem(i)
+        statusMenu = StatusMenu(actions: .init(
+            capture: { [weak self] in self?.capture() },
+            delayedCapture: { [weak self] in self?.startDelayedCapture(seconds: $0) },
+            cancelDelay: { [weak self] in self?.cancelDelayedCapture() },
+            scan: { [weak self] in self?.scanCodes() },
+            pinClipboard: { PinManager.shared.pinClipboard() },
+            togglePins: { PinManager.shared.toggleHidden() },
+            closePins: { PinManager.shared.closeAll() },
+            openSettings: { SettingsWindowController.shared.present() },
+            openShortcutSettings: { SettingsWindowController.shared.present(pane: .shortcuts) },
+            update: { Updater.shared.checkForUpdates() }))
+        statusMenu.currentState = { [countdown] in
+            StatusMenu.State(hasPins: PinManager.shared.hasPins, pinsHidden: PinManager.shared.isHidingAll,
+                             countingDown: countdown.isRunning, pendingVersion: Updater.shared.pendingVersion)
         }
-        delayItem.submenu = delayMenu
-        menu.addItem(delayItem)
-        cancelDelayItem = item("取消延时截图", #selector(cancelDelayedCapture))
-        menu.addItem(cancelDelayItem)
-        scanItem = item("扫描屏幕上的二维码 / 条形码", #selector(scanCodes))
-        menu.addItem(scanItem)
-        menu.addItem(.separator())
-        pinClipboardItem = item("从剪贴板贴图", #selector(pinClipboard))
-        menu.addItem(pinClipboardItem)
-        togglePinsItem = item("隐藏全部贴图", #selector(togglePins))
-        menu.addItem(togglePinsItem)
-        closePinsItem = item("关闭全部贴图", #selector(closePins))
-        menu.addItem(closePinsItem)
-        menu.addItem(.separator())
-        menu.addItem(item("设置…", #selector(openSettings), ","))
-        menu.addItem(.separator())
-        checkUpdatesItem = item("检查更新…", #selector(checkForUpdates))
-        checkUpdatesItem.isHidden = !Updater.isAvailable
-        menu.addItem(checkUpdatesItem)
-        menu.addItem(NSMenuItem(title: "退出 Shotlate", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        statusItem.menu = menu
+        statusItem.menu = statusMenu.menu
 
         registerHotKeys()
         let center = NotificationCenter.default
@@ -74,12 +47,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func item(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
-        item.target = self
-        return item
-    }
-
     private func registerHotKeys() {
         let settings = Settings.shared
         let capture = settings.shortcut
@@ -87,42 +54,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let ok = HotKeyCenter.shared.register(.capture, shortcut: capture) {
             if let recorder = GIFRecorder.current { recorder.stop() } else { CaptureSession.begin() }
         }
-        captureItem.title = ok ? "截图（\(capture.displayString)）" : "截图（快捷键 \(capture.displayString) 已被占用）"
+        statusMenu.setShortcut(capture, registered: ok, for: .capture)
 
         let pin = settings.pinClipboardShortcut
         let pinOK = HotKeyCenter.shared.register(.pinClipboard, shortcut: pin) { PinManager.shared.pinClipboard() }
-        if let pin {
-            pinClipboardItem.title = pinOK ? "从剪贴板贴图（\(pin.displayString)）" : "从剪贴板贴图（快捷键 \(pin.displayString) 已被占用）"
-        } else {
-            pinClipboardItem.title = "从剪贴板贴图"
-        }
+        statusMenu.setShortcut(pin, registered: pinOK, for: .pinClipboard)
 
         let toggle = settings.togglePinsShortcut
         let toggleOK = HotKeyCenter.shared.register(.togglePins, shortcut: toggle) { PinManager.shared.toggleHidden() }
-        registerScanHotKey()
-        togglePinsShortcutLabel = toggle.map { toggleOK ? "（\($0.displayString)）" : "（快捷键 \($0.displayString) 已被占用）" } ?? ""
+        statusMenu.setShortcut(toggle, registered: toggleOK, for: .togglePins)
+
+        let scan = settings.scanCodeShortcut
+        let scanOK = HotKeyCenter.shared.register(.scanCode, shortcut: scan) { CodeScanner.scanScreens() }
+        statusMenu.setShortcut(scan, registered: scanOK, for: .scan)
     }
-
-    private var togglePinsShortcutLabel = ""
-
-    private func registerScanHotKey() {
-        let scan = Settings.shared.scanCodeShortcut
-        let ok = HotKeyCenter.shared.register(.scanCode, shortcut: scan) { CodeScanner.scanScreens() }
-        scanItem.title = "扫描屏幕上的二维码 / 条形码" + (scan.map { ok ? "（\($0.displayString)）" : "（快捷键 \($0.displayString) 已被占用）" } ?? "")
-    }
-
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        let pins = PinManager.shared
-        closePinsItem.isEnabled = pins.hasPins
-        togglePinsItem.isEnabled = pins.hasPins
-        togglePinsItem.title = (pins.isHidingAll ? "显示全部贴图" : "隐藏全部贴图") + togglePinsShortcutLabel
-        cancelDelayItem.isHidden = !countdown.isRunning
-        let pending = Updater.shared.pendingVersion
-        updateReadyItem.isHidden = pending == nil
-        updateReadyItem.title = "有新版本 \(pending ?? "")…"
-    }
-
-    @objc private func checkForUpdates() { Updater.shared.checkForUpdates() }
 
     /// While recording, the menu bar icon becomes a stop button showing the elapsed time.
     private func updateRecordingStatus() {
@@ -133,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             statusItem.menu = nil
             button.target = self
             button.action = #selector(stopRecording)
-            button.image = NSImage(systemSymbolName: "stop.circle", accessibilityDescription: "停止录制 GIF")
+            button.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "停止录制 GIF")
             button.image?.isTemplate = true
             button.imagePosition = .imageLeading
             statusItem.length = NSStatusItem.variableLength
@@ -144,26 +89,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             update()
             recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in update() }
         } else {
-            statusItem.menu = menu
+            statusItem.menu = statusMenu.menu
             button.action = nil
-            button.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Shotlate")
-            button.image?.isTemplate = true
+            button.image = BrandGlyph.image()
             resetStatusButton()
         }
     }
 
     @objc private func stopRecording() { GIFRecorder.current?.stop() }
 
-    @objc private func capture() {
+    private func capture() {
         // Let the menu close before the screen is frozen.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { CaptureSession.begin() }
     }
 
     /// Counts down on the menu bar icon, so menus and hover states can be opened before the screen freezes.
-    @objc private func delayedCapture(_ sender: NSMenuItem) {
-        startDelayedCapture(seconds: sender.tag)
-    }
-
     private func startDelayedCapture(seconds: Int) {
         let button = statusItem.button
         countdown.start(seconds: seconds, tick: { remaining in
@@ -176,12 +116,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         })
     }
 
-    @objc private func scanCodes() {
+    private func scanCodes() {
         // Let the menu close first so it doesn't cover a code.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { CodeScanner.scanScreens() }
     }
 
-    @objc private func cancelDelayedCapture() {
+    private func cancelDelayedCapture() {
         countdown.cancel()
         resetStatusButton()
     }
@@ -190,14 +130,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.title = ""
         statusItem.button?.imagePosition = .imageOnly
         statusItem.length = NSStatusItem.squareLength
-    }
-
-    @objc private func pinClipboard() { PinManager.shared.pinClipboard() }
-    @objc private func closePins() { PinManager.shared.closeAll() }
-    @objc private func togglePins() { PinManager.shared.toggleHidden() }
-
-    @objc private func openSettings() {
-        SettingsWindowController.shared.present()
     }
 
     /// Accessory apps still need an Edit menu, or ⌘C/⌘V/⌘A do nothing in text fields.

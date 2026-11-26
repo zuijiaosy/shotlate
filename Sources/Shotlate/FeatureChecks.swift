@@ -29,6 +29,7 @@ enum FeatureChecks {
         ("scan-code", scanCode),
         ("pin-annotate", pinAnnotate),
         ("hotkeys", hotkeys),
+        ("status-menu", statusMenu),
         ("magnifier", magnifierTool),
         ("loupe", loupe),
         ("pin-translate", pinTranslate),
@@ -497,6 +498,69 @@ enum FeatureChecks {
                                           characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!)
         expect(second.isFinished && pin.rep === before && pin.isVisible, "Esc leaves the pin unchanged")
         PinManager.shared.closeAll()
+    }
+
+    @MainActor static func statusMenu() async {
+        var fired: [String] = []
+        let menu = StatusMenu(actions: .init(
+            capture: { fired.append("capture") }, delayedCapture: { fired.append("delay \($0)") },
+            cancelDelay: { fired.append("cancel") }, scan: { fired.append("scan") }, pinClipboard: { fired.append("pin") },
+            togglePins: { fired.append("toggle") }, closePins: { fired.append("close") }, openSettings: { fired.append("settings") },
+            openShortcutSettings: { fired.append("shortcuts") }, update: { fired.append("update") }))
+        let base = ["截图", "延时截图", "扫描二维码", "从剪贴板贴图", "—", "设置…\t,", "退出 Shotlate\tq"]
+        expect(menu.visibleRows == base, "the everyday menu is six rows: four actions, then settings and quit")
+
+        menu.setShortcut(.default, registered: true, for: .capture)
+        menu.setShortcut(.defaultPinClipboard, registered: true, for: .pinClipboard)
+        let captureRow = menu.menu.items.first { $0.title == "截图" }
+        expect(captureRow?.keyEquivalent == "a" && captureRow?.keyEquivalentModifierMask == [.option],
+               "a global shortcut shows in the menu's shortcut column, not in the title")
+
+        menu.refresh(.init(hasPins: true))
+        expect(menu.visibleRows.contains("隐藏全部贴图") && menu.visibleRows.contains("关闭全部贴图"), "pin management appears once there are pins")
+        menu.refresh(.init(hasPins: true, pinsHidden: true))
+        expect(menu.visibleRows.contains("显示全部贴图"), "and offers to show them while they are hidden")
+        menu.refresh(.init(countingDown: true))
+        expect(menu.visibleRows.contains("取消延时截图") && !menu.visibleRows.contains("延时截图"), "a countdown swaps 延时截图 for 取消延时截图")
+        menu.refresh(.init(pendingVersion: "9.9.9"))
+        expect(menu.visibleRows.prefix(2) == ["更新到 9.9.9…", "—"], "an update waiting to install sits at the top")
+
+        menu.setShortcut(.defaultPinClipboard, registered: false, for: .pinClipboard)
+        menu.refresh(.init())
+        expect(menu.visibleRows.first == "快捷键 ⌥⇧V 已被占用…" && menu.visibleRows.contains("从剪贴板贴图"),
+               "a shortcut another app holds is flagged at the top, and its row drops the shortcut")
+        menu.setShortcut(.defaultPinClipboard, registered: true, for: .pinClipboard)
+        menu.refresh(.init())
+        expect(menu.visibleRows.first == "截图\ta", "the notice goes away once the shortcut registers")
+
+        for title in ["截图", "扫描二维码", "从剪贴板贴图", "设置…"] {
+            if let index = menu.menu.items.firstIndex(where: { $0.title == title }) { menu.menu.performActionForItem(at: index) }
+        }
+        if let delay = menu.menu.items.first(where: { $0.title == "延时截图" })?.submenu { delay.performActionForItem(at: 1) }
+        expect(fired == ["capture", "scan", "pin", "settings", "delay 5"], "each row runs its action")
+
+        // The menu-bar mark: crisp strokes, and the reticle's centre stays open so it can't read as "+".
+        let glyph = BrandGlyph.image()
+        expect(glyph.isTemplate && glyph.size == NSSize(width: 18, height: 18), "the menu-bar icon is an 18 pt template image")
+        for scale in [1, 2] {
+            let px = 18 * scale
+            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8, samplesPerPixel: 4,
+                                       hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            // Drawn straight into the target pixels, as the menu bar does: white glyph on a blue bar.
+            let bounds = NSRect(x: 0, y: 0, width: px, height: px)
+            glyph.draw(in: bounds)
+            NSColor.white.setFill()
+            bounds.fill(using: .sourceIn)
+            NSColor(srgbRed: 0.18, green: 0.39, blue: 0.75, alpha: 1).setFill()
+            bounds.fill(using: .destinationOver)
+            NSGraphicsContext.restoreGraphicsState()
+            let centre = rep.colorAt(x: 13 * scale, y: 13 * scale)!.blueComponent - rep.colorAt(x: 13 * scale, y: 13 * scale)!.redComponent
+            let stroke = rep.colorAt(x: 3 * scale, y: 5 * scale)!
+            expect(centre > 0.4 && stroke.redComponent > 0.9, "at \(scale)x the corners are solid and the reticle's centre is open")
+            write(rep, "menubar-icon@\(scale)x.png")
+        }
     }
 
     @MainActor static func hotkeys() async {

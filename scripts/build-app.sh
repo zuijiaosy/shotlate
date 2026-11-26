@@ -26,6 +26,8 @@ else
 fi
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# macOS 26+ picks the layered icon out of Assets.car (CFBundleIconName); older systems use the .icns.
+cp Resources/Assets.car "$APP/Contents/Resources/Assets.car"
 if [ -n "${VERSION:-}" ]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 fi

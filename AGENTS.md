@@ -61,7 +61,7 @@ Sources/ShotlateCore/   不依赖 AppKit 的纯逻辑，有单元测试：Vision
                         流式 GIF 编码（GIFEncoder：只写变化区域、≤255 色无损、否则中位切分不抖动）
 Sources/Shotlate/       菜单栏应用
 Tests/ShotlateCoreTests 单元测试（只测 ShotlateCore）
-Resources/              Info.plist、图标；scripts/ 构建、打包、测试、生成发布说明
+Resources/              Info.plist、图标（AppIcon.icon 源文件及编译好的 Assets.car / AppIcon.icns，改图标用 scripts/make-icon.sh）；scripts/ 构建、打包、测试、生成发布说明
 docs/images/            README 用的动图和截图
 ```
 
@@ -83,7 +83,8 @@ docs/images/            README 用的动图和截图
   - `ChatTranslator` 是用户自配的大模型。
 - **Settings.swift**：设置都在 UserDefaults（域 `app.shotlate.Shotlate`）；翻译 API Key 存 `~/Library/Application Support/Shotlate/api-key`（权限 600，**不用钥匙串**，因为每次重新签名都会弹密码框）。未打包运行（`.build/debug/Shotlate`）时 Key 只读环境变量 `DEEPSEEK_API_KEY`，从不碰真实配置。
 - **SettingsWindow.swift**：`SettingsModel` 的每个属性 `didSet` 立即写入 Settings；改全局快捷键会发 `Settings.didChange`，AppDelegate 重新注册（HotKey.swift，Carbon，不需要辅助功能权限）。
-- **Updater.swift**：包一层 Sparkle 的 `SPUStandardUpdaterController`。菜单栏应用没有 Dock 图标，所以开了“温和提醒”：定时检查发现新版时不弹窗，只让 AppDelegate 在菜单顶部显示「有新版本 …」，点了才弹 Sparkle 的窗口。只在打包的 .app 里启动；`.build/debug` 和自检不碰 Sparkle。Sparkle 的配置在 Info.plist 的 `SU*` 键里。
+- **StatusMenu.swift + BrandGlyph.swift**：菜单栏图标（代码绘制的 18pt 矢量模板）和菜单。全局快捷键显示在右侧快捷键列；「检查更新…」在设置 → 通用，仅在发现新版本时在菜单顶部出现「更新到 …」；贴图管理项仅在有贴图时显示；倒计时中「延时截图」原地替换为「取消延时截图」；macOS 26+ 每行带系统图标。
+- **Updater.swift**：包一层 Sparkle 的 `SPUStandardUpdaterController`。菜单栏应用没有 Dock 图标，所以开了“温和提醒”：定时检查发现新版时不弹窗，只让菜单栏菜单顶部显示「更新到 …」，点了才弹 Sparkle 的窗口；手动检查在「设置 → 通用」。只在打包的 .app 里启动；`.build/debug` 和自检不碰 Sparkle。Sparkle 的配置在 Info.plist 的 `SU*` 键里。
 - **GIFRecorder.swift**：GIF 录制，结构照搬长截图（SCStream → 只留最新一帧 → 串行队列编码），边录边写临时文件（`$TMPDIR/Shotlate GIF/<uuid>/`），内存不随时长增长。帧时间取到达时刻，丢帧只会拉长上一帧。录制中 AppDelegate 把菜单栏图标换成停止按钮（`GIFRecorder.didChange`）。自检 `gif` 用 `capturesScreen: false` 注入合成帧，不需要屏幕录制权限；真实录屏路径只能手动验证。
 - **FeatureChecks.swift + CaptureHarness.swift**：离屏窗口加模拟事件的自检。未打包运行时，开始前会清空本进程的 UserDefaults 域，保证互不影响。新增交互功能时在这里加对应的检查，也就是用户说的“自检”。
 

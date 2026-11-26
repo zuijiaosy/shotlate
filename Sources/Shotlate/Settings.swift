@@ -55,6 +55,28 @@ struct Shortcut: Codable, Equatable {
         if carbonModifiers & UInt32(cmdKey) != 0 { s += "⌘" }
         return s + keyLabel
     }
+
+    /// The key and modifiers for an NSMenuItem's right-hand shortcut column. Display only: the global hotkey
+    /// does the work. nil for keys a menu can't show (it then shows no shortcut).
+    var menuKeyEquivalent: (key: String, modifiers: NSEvent.ModifierFlags)? {
+        let key: String
+        if keyLabel.count == 1 {
+            key = keyLabel.lowercased()
+        } else if keyLabel == "Space" {
+            key = " "
+        } else if keyLabel.hasPrefix("F"), let n = Int(keyLabel.dropFirst()), (1...12).contains(n),
+                  let scalar = UnicodeScalar(UInt16(NSF1FunctionKey + n - 1)) {
+            key = String(Character(scalar))
+        } else {
+            return nil
+        }
+        var modifiers: NSEvent.ModifierFlags = []
+        if carbonModifiers & UInt32(controlKey) != 0 { modifiers.insert(.control) }
+        if carbonModifiers & UInt32(optionKey) != 0 { modifiers.insert(.option) }
+        if carbonModifiers & UInt32(shiftKey) != 0 { modifiers.insert(.shift) }
+        if carbonModifiers & UInt32(cmdKey) != 0 { modifiers.insert(.command) }
+        return (key, modifiers)
+    }
 }
 
 enum ImageFormat: String, CaseIterable, Identifiable {

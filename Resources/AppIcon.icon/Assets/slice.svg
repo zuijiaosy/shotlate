@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="card" x1="306" y1="312" x2="694" y2="680" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#E2EEFF"/>
+    </linearGradient>
+    <linearGradient id="glyph" x1="392" y1="376" x2="608" y2="616" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0EA5E9"/><stop offset="0.5" stop-color="#2068E8"/><stop offset="1" stop-color="#1740B8"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(512 512) scale(1.2427) translate(-512 -512)">
+    <rect x="306" y="312" width="388" height="368" rx="64" fill="url(#card)"/>
+    <g fill="none" stroke="url(#glyph)" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 500 376 V 402"/>
+      <path d="M 388 452 H 612"/>
+      <path d="M 556 456 C 546 528, 492 580, 398 612"/>
+      <path d="M 444 456 C 460 524, 512 576, 602 612"/>
+    </g>
+  </g>
+</svg>

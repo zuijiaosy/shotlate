@@ -27,6 +27,8 @@ final class SettingsModel: ObservableObject {
     @Published var loginItemError: String?
     @Published var automaticallyChecksForUpdates = Updater.shared.automaticallyChecks { didSet { Updater.shared.automaticallyChecks = automaticallyChecksForUpdates } }
     @Published var testResult: String?
+    @Published var pendingVersion = Updater.shared.pendingVersion
+    private var updateObserver: NSObjectProtocol?
     @Published var isTesting = false
 
     static let languages = ["简体中文", "繁體中文", "English", "日本語", "한국어"]
@@ -37,7 +39,12 @@ final class SettingsModel: ObservableObject {
         loadsSecrets = loadSecrets
         if loadSecrets { apiKey = Settings.shared.apiKey }
         refreshSystemPack()
+        updateObserver = NotificationCenter.default.addObserver(forName: Updater.didChange, object: nil, queue: .main) { [weak self] _ in
+            self?.pendingVersion = Updater.shared.pendingVersion
+        }
     }
+
+    deinit { updateObserver.map(NotificationCenter.default.removeObserver) }
 
     func refreshSystemPack() {
         guard engine == .system else { systemPackInstalled = nil; return }
@@ -327,9 +334,17 @@ struct SettingsView: View {
             }
         }
         Section {
+            // Moved here from the menu bar menu: checking by hand is rare, and a found update still shows there.
+            LabeledContent("当前版本") {
+                HStack {
+                    Text(Updater.versionString).foregroundStyle(.secondary)
+                    Button(model.pendingVersion.map { "更新到 \($0)…" } ?? "检查更新…") { Updater.shared.checkForUpdates() }
+                        .disabled(!Updater.isAvailable)
+                }
+            }
             Toggle("自动检查更新", isOn: $model.automaticallyChecksForUpdates)
         } footer: {
-            Text("当前版本 \(Updater.versionString)。每天检查一次，有新版本时菜单里会出现提示，由你决定何时安装。")
+            Text("每天检查一次，有新版本时菜单栏菜单顶部会出现提示，由你决定何时安装。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -366,10 +381,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func present() {
+    func present(pane: SettingsPane = .shortcuts) {
         // Reload so the window reflects what is stored now.
         model = SettingsModel()
-        let controller = NSHostingController(rootView: SettingsView(model: model))
+        let controller = NSHostingController(rootView: SettingsView(model: model, pane: pane))
         controller.sizingOptions = []
         window?.contentViewController = controller
         window?.setContentSize(CGSize(width: 680, height: 460))
