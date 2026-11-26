@@ -20,6 +20,10 @@ Shotlate（原名 Snap）是 macOS 菜单栏截图工具，核心路径只有：
 - 默认保存到 `~/Downloads`。
 - 界面文案、README、提交信息用中文；代码注释用英文，风格简短，写“为什么”。
 
+## 官网同步（必须遵守）
+
+Mac 版每次改功能、默认值或交互，**同一个任务里**接着更新官网（`/Users/lin/code/my/shotlate-web`，见下方「官网」）：改文案；截图或视频因此过时的，重新生成并替换。不要当成可选的后续工作。Windows 版（`/Users/lin/code/my/shotlate-win`）不再跟着同步。官网的提交和部署仍然要等用户明确要求。
+
 ## 常用命令
 
 只需要 Command Line Tools，不需要 Xcode。
@@ -70,7 +74,8 @@ docs/images/            README 用的动图和截图
 - **Chrome.swift**：工具栏 `ToolbarView`、悬停卡片 `HoverCardView`、单键快捷键 `ToolbarKeys`（UserDefaults `toolbar.keys`，只存改过的）、样式条、选区上方的尺寸条、OCR 结果面板。`ToolbarAction.action(forKey:)` 决定单键按下时触发哪个按钮。
 - **Recognition.swift**：Vision 文字识别（截图的 OCR / 翻译共用一次结果，贴图文字选择走 `layout`）、译文排版 `TranslationLayout`、扫码 `CodeScanner`、贴图翻译 `ImageTranslator`。
 - **Pin.swift**：`PinManager`（全部贴图、隐藏 / 显示）、`PinWindow`（缩放、透明度、翻译、复制保存）、`PinView`（拖动、文字选择、右键菜单）。
-- **翻译引擎**（Translator.swift）：`Translator.translate` 按 `TranslationConfig.engine` 分发，分批、并发、合并的公共部分在 `WebTranslation`。新用户默认 `.bilibili`，已有 api-key 文件的老用户默认 `.llm`（只在没存过 `translate.engine` 时生效）。`--translate-image` 可用 `--engine free|google|bing|bilibili|llm` 指定。
+- **翻译引擎**（Translator.swift）：`Translator.translate` 按 `TranslationConfig.engine` 分发，分批、并发、合并的公共部分在 `WebTranslation`。新用户默认 `.system`（macOS 26 以前是 `.bilibili`），已有 api-key 文件的老用户默认 `.llm`（只在没存过 `translate.engine` 时生效）。`--translate-image` 可用 `--engine system|bilibili|free|google|bing|llm` 指定，`-translate.targetLanguage 日本語` 换目标语言。
+  - `SystemTranslator`（SystemTranslator.swift）：系统 Translation 框架，本机运行。不经过 SwiftUI 直接建 `TranslationSession(installedSource:target:)` 要 macOS 26，必须给出原文语言（用 NaturalLanguage 对全部段落一起判断，单个短词判断不准），只能用已下载的语言对，代码里没法触发下载。不可用时（系统旧、语言包没下载、判断不出语言、框架报错）整批交给 `BilibiliTranslator`。会话按语言对缓存（新会话第一次约 1 秒，之后零点几秒）。框架通过主队列回调，所以在主线程上用信号量干等会死锁（DevTools 的 `wait` 因此改成转 RunLoop）。实测质量和谷歌接近，偏直译（如 Fixed → 固定的），不如 B站和必应；用户选它当默认是看中速度和离线。
   - `.free` = `FreeTranslator`，腾讯 TranSmart（`transmart.qq.com/api/imt`，非官方），一次发一批 `text_list`，单次约 5000 字符封顶所以按 4000 分批。rawValue 叫 `free` 是历史原因（当时只有这一个免费引擎），已存的设置靠它，不要改名。
   - `GoogleTranslator`：`clients5.google.com/translate_a/t?client=dict-chrome-ex`，POST 表单、每段一个 `q`，纯文本。国内要代理。`translate.googleapis.com` 的 `client=gtx` 容易 429，不用。
   - `BingTranslator`：先 GET `www.bing.com/translator` 从页面取 IG / IID / key / token（国内会跳到 cn.bing.com，token 只认签发它的域名），再 POST `/ttranslatev3`，必须带 Referer，否则 200 空响应。一次只收一段文字（5000 字符），所以按换行拼接再拆开，行数对不上就逐段重发。直连时 token 可以复用约一小时；走代理时常随机 401，所以最多试 3 次。Edge 的 `edge.microsoft.com/translate/auth` 已 404，不用。

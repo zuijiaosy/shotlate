@@ -9,11 +9,13 @@ enum ShortcutTarget: Equatable { case capture, pinClipboard, togglePins, scanCod
 final class SettingsModel: ObservableObject {
     private let settings = Settings.shared
 
-    @Published var engine = Settings.shared.engine { didSet { settings.engine = engine; testResult = nil } }
+    @Published var engine = Settings.shared.engine { didSet { settings.engine = engine; testResult = nil; refreshSystemPack() } }
+    /// Whether macOS has the English → target pack for system translation; nil while unknown or not relevant.
+    @Published var systemPackInstalled: Bool?
     @Published var baseURL = Settings.shared.baseURL { didSet { settings.baseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines) } }
     @Published var model = Settings.shared.model { didSet { settings.model = model.trimmingCharacters(in: .whitespacesAndNewlines) } }
     @Published var apiKey = "" { didSet { if loadsSecrets { settings.apiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines) } } }
-    @Published var targetLanguage = Settings.shared.targetLanguage { didSet { settings.targetLanguage = targetLanguage } }
+    @Published var targetLanguage = Settings.shared.targetLanguage { didSet { settings.targetLanguage = targetLanguage; refreshSystemPack() } }
     @Published var saveDirectory = Settings.shared.saveDirectory { didSet { settings.saveDirectory = saveDirectory } }
     @Published var imageFormat = Settings.shared.imageFormat { didSet { settings.imageFormat = imageFormat } }
     @Published var shortcut = Settings.shared.shortcut { didSet { settings.shortcut = shortcut; shortcutsChanged() } }
@@ -34,6 +36,21 @@ final class SettingsModel: ObservableObject {
     init(loadSecrets: Bool = true) {
         loadsSecrets = loadSecrets
         if loadSecrets { apiKey = Settings.shared.apiKey }
+        refreshSystemPack()
+    }
+
+    func refreshSystemPack() {
+        guard engine == .system else { systemPackInstalled = nil; return }
+        let target = targetLanguage
+        Task { @MainActor in
+            let installed = await SystemTranslator.isInstalled(targetLanguage: target)
+            if engine == .system, targetLanguage == target { systemPackInstalled = installed }
+        }
+    }
+
+    /// The translation languages list lives under Language & Region; macOS has no deeper link to it.
+    func openTranslationLanguages() {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Localization-Settings.extension")!)
     }
 
     var config: TranslationConfig {
@@ -62,6 +79,9 @@ final class SettingsModel: ObservableObject {
             do {
                 let result = try await Translator.translate([.init(id: 0, text: "Take a screenshot and translate it in place.")], config: config)
                 testResult = result[0].map { "连接成功：\($0)" } ?? "连接成功，但没有返回译文"
+                if config.engine == .system, await SystemTranslator.isInstalled(targetLanguage: config.targetLanguage) == false {
+                    testResult = (testResult ?? "") + "（没有下载语言包，这次用的是 B站 Index）"
+                }
             } catch {
                 testResult = "失败：" + ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
@@ -245,7 +265,7 @@ struct SettingsView: View {
     private var translate: some View {
         Section {
             Picker("翻译引擎", selection: $model.engine) {
-                ForEach(TranslationEngine.allCases, id: \.self) { engine in
+                ForEach(TranslationEngine.allCases.filter(\.isAvailable), id: \.self) { engine in
                     Text(engine.needsAPIKey ? engine.displayName : "\(engine.displayName)（免费）").tag(engine)
                 }
             }
@@ -256,6 +276,15 @@ struct SettingsView: View {
             }
             Picker("译成", selection: $model.targetLanguage) {
                 ForEach(SettingsModel.languages, id: \.self) { Text($0).tag($0) }
+            }
+            if model.engine == .system, let installed = model.systemPackInstalled {
+                LabeledContent("语言包") {
+                    HStack {
+                        Text(installed ? "英语 → \(model.targetLanguage) 已下载" : "英语 → \(model.targetLanguage) 未下载")
+                            .foregroundStyle(installed ? .secondary : Color.orange)
+                        Button("管理…") { model.openTranslationLanguages() }
+                    }
+                }
             }
             HStack {
                 Button("测试连接") { model.testConnection() }
@@ -271,7 +300,9 @@ struct SettingsView: View {
                     .textSelection(.enabled)
             }
         } footer: {
-            Text(Self.translateFooter(model.engine) + "发送给翻译服务的只有识别出的文字，截图本身不会上传。")
+            Text(Self.translateFooter(model.engine) + (model.engine == .system
+                 ? "截图和文字都不会离开这台 Mac；改用 B站 Index 时只发送识别出的文字。"
+                 : "发送给翻译服务的只有识别出的文字，截图本身不会上传。"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -279,6 +310,7 @@ struct SettingsView: View {
 
     private static func translateFooter(_ engine: TranslationEngine) -> String {
         switch engine {
+        case .system: return "macOS 自带的翻译，在本机完成，不联网，速度最快。要先在「系统设置 → 通用 → 语言与地区 → 翻译语言」下载对应语言；没下载的语言自动改用 B站 Index。"
         case .free: return "腾讯交互翻译的网页接口，不需要任何配置，国内速度快。"
         case .google: return "谷歌翻译的网页接口，不需要配置。国内需要开启代理才能连上（跟随系统代理）。"
         case .bing: return "必应翻译的网页接口，不需要配置，国内可以直连。"

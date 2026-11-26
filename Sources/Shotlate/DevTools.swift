@@ -3,7 +3,7 @@ import ShotlateCore
 
 /// Command-line entry points for checking OCR and in-place translation without the capture UI.
 ///
-///   Shotlate --translate-image input.png output.png [--scale 2] [--engine free|google|bing|bilibili|llm]
+///   Shotlate --translate-image input.png output.png [--scale 2] [--engine system|bilibili|free|google|bing|llm]
 ///
 /// Uses the API key from DEEPSEEK_API_KEY. Without a key it substitutes
 /// placeholder translations so layout and rendering can still be checked.
@@ -100,7 +100,9 @@ enum DevTools {
             do { result = .success(try await operation()) } catch { result = .failure(error) }
             semaphore.signal()
         }
-        semaphore.wait()
+        // Keep the main run loop turning: the Translation framework delivers results through the main queue,
+        // so blocking it outright would deadlock `--translate-image --engine system`.
+        while semaphore.wait(timeout: .now()) == .timedOut { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
         return try result.get()
     }
 

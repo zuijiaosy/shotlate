@@ -529,13 +529,17 @@ enum FeatureChecks {
         model.scanCodeShortcut = nil
         center.unregisterAll()
 
-        // Bilibili's free engine is the default and needs no key; the LLM engine is one pick away.
-        expect(model.engine == .bilibili && Settings.shared.translationConfig.engine == .bilibili, "translation starts on the Bilibili engine, without an API key")
+        // System translation is the default on macOS 26+ (Bilibili before) and needs no key; the LLM is one pick away.
+        let defaultEngine: TranslationEngine = SystemTranslator.isSupported ? .system : .bilibili
+        expect(model.engine == defaultEngine && Settings.shared.translationConfig.engine == defaultEngine, "translation starts on \(defaultEngine.rawValue), without an API key")
         expect(!Settings.shared.translationConfig.clientKey.isEmpty && Settings.shared.clientKey == Settings.shared.clientKey, "the free engine gets a stable per-install client key")
         model.engine = .llm
         expect(Settings.shared.engine == .llm, "picking the LLM engine saves at once")
-        for engine in TranslationEngine.allCases {
+        for engine in TranslationEngine.allCases where engine.isAvailable {
             model.engine = engine
+            // The language-pack row fills in asynchronously; give it a moment so the screenshot shows it.
+            let deadline = Date().addingTimeInterval(3)
+            while engine == .system, model.systemPackInstalled == nil, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
             let hosting = NSHostingView(rootView: SettingsView(model: model, pane: .translate))
             hosting.frame = CGRect(x: 0, y: 0, width: 680, height: 460)
             let window = NSWindow(contentRect: CGRect(x: -8000, y: -8000, width: 680, height: 460), styleMask: .borderless, backing: .buffered, defer: false)
@@ -546,7 +550,7 @@ enum FeatureChecks {
                 write(rep, "settings-translate-\(engine.rawValue).png")
             }
         }
-        model.engine = .bilibili
+        model.engine = defaultEngine
 
         // Every pane, rendered offscreen for a look (without reading the API key).
         for pane in SettingsPane.allCases {

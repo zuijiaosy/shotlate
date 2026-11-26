@@ -70,12 +70,13 @@ final class Settings {
 
     private let defaults = UserDefaults.standard
 
-    /// Existing users who already set up an API key keep the LLM; everyone else starts on Bilibili's free model,
-    /// whose translations read more naturally than the other free engines'. An explicit pick is saved and kept.
+    /// Existing users who already set up an API key keep the LLM; everyone else starts on macOS's own translation
+    /// (fast and offline; it hands what it can't do to Bilibili), or on Bilibili before macOS 26.
+    /// An explicit pick is saved and kept.
     var engine: TranslationEngine {
         get {
             if let raw = defaults.string(forKey: "translate.engine"), let engine = TranslationEngine(rawValue: raw) { return engine }
-            return apiKey.isEmpty ? .bilibili : .llm
+            return apiKey.isEmpty ? (SystemTranslator.isSupported ? .system : .bilibili) : .llm
         }
         set { defaults.set(newValue.rawValue, forKey: "translate.engine") }
     }

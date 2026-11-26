@@ -2,7 +2,9 @@ import Foundation
 
 /// Which service translates: the free web engines need no setup, the LLM one needs the user's own API key.
 public enum TranslationEngine: String, CaseIterable, Sendable {
-    /// The default (listed first in Settings).
+    /// macOS's on-device translation: the default where available (macOS 26+), listed first in Settings.
+    case system
+    /// The default before macOS 26, and the fallback for whatever `system` can't translate.
     case bilibili
     /// Tencent TranSmart. The raw value dates from when it was the only free engine; saved settings still use it.
     case free
@@ -12,8 +14,12 @@ public enum TranslationEngine: String, CaseIterable, Sendable {
 
     public var needsAPIKey: Bool { self == .llm }
 
+    /// Engines this Mac can use; `system` needs macOS 26.
+    public var isAvailable: Bool { self != .system || SystemTranslator.isSupported }
+
     public var displayName: String {
         switch self {
+        case .system: return "系统翻译"
         case .free: return "腾讯翻译"
         case .google: return "谷歌翻译"
         case .bing: return "必应翻译"
@@ -623,6 +629,7 @@ public enum BilibiliTranslator {
 public enum Translator {
     public static func translate(_ items: [ChatTranslator.Item], config: TranslationConfig, session: URLSession = .shared) async throws -> [Int: String] {
         switch config.engine {
+        case .system: return try await SystemTranslator.translate(items, config: config, session: session)
         case .free: return try await FreeTranslator.translate(items, config: config, session: session)
         case .google: return try await GoogleTranslator.translate(items, config: config, session: session)
         case .bing: return try await BingTranslator.translate(items, config: config, session: session)

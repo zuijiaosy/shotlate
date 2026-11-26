@@ -840,3 +840,25 @@ private final class WebEngineProtocol: URLProtocol {
 
     override func stopLoading() {}
 }
+
+@Suite struct SystemTranslatorTests {
+    @Test func mapsEveryLanguage() {
+        #expect(["简体中文", "繁體中文", "English", "日本語", "한국어"].map(SystemTranslator.languageCode) == ["zh-Hans", "zh-Hant", "en", "ja", "ko"])
+    }
+
+    @Test func detectsTheSourceOverAllParagraphs() {
+        #expect(SystemTranslator.sourceLanguage(["Fixed", "Search results update while you type."]) == "en")
+        #expect(SystemTranslator.sourceLanguage(["Paramètres", "Enregistrer dans le dossier Téléchargements"]) == "fr")
+        #expect(SystemTranslator.sourceLanguage([""]) == nil)
+    }
+
+    @Test func dropsTheSpaceAfterFullWidthPunctuation() {
+        #expect(SystemTranslator.tidy("获取失败。 30秒后重试！ 好", targetCode: "zh-Hans") == "获取失败。30秒后重试！好")
+        #expect(SystemTranslator.tidy("Done. Retry", targetCode: "en") == "Done. Retry")
+    }
+
+    @Test func systemEngineIsListedFirstAndNeedsNoKey() {
+        #expect(TranslationEngine.allCases.first == .system && !TranslationEngine.system.needsAPIKey)
+        #expect(TranslationEngine.system.isAvailable == SystemTranslator.isSupported)
+    }
+}
