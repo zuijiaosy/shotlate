@@ -147,22 +147,134 @@ final class ChromeButton: NSButton {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
-/// The black "OCR" badge from iShot's toolbar; a template image so it follows the tint color.
+/// Hollow fine-line badge ("OCR", "GIF") sized identically so both match the 1.25pt line weight of neighboring icons.
 func badgeImage(_ text: String) -> NSImage {
-    let font = NSFont.systemFont(ofSize: 9.5, weight: .heavy)
-    let size = CGSize(width: NSAttributedString(string: text, attributes: [.font: font]).size().width + 8, height: 15)
-    let image = NSImage(size: size, flipped: false) { rect in
-        NSColor.black.setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3).fill()
-        // Knock the letters out of the badge.
-        NSGraphicsContext.current?.compositingOperation = .destinationOut
-        let label = NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.black])
+    let size = CGSize(width: 26, height: 15.5)
+    let image = NSImage(size: size, flipped: true) { rect in
+        NSColor.black.set()
+        let border = NSBezierPath(roundedRect: rect.insetBy(dx: 0.75, dy: 0.75), xRadius: 3.4, yRadius: 3.4)
+        border.lineWidth = 1.25
+        border.stroke()
+
+        let font = NSFont.systemFont(ofSize: 8.3, weight: .bold)
+        let kern: CGFloat = text == "GIF" ? 0.35 : 0.15
+        let label = NSAttributedString(string: text, attributes: [
+            .font: font,
+            .foregroundColor: NSColor.black,
+            .kern: kern,
+        ])
         let textSize = label.size()
-        label.draw(at: CGPoint(x: (rect.width - textSize.width) / 2, y: (rect.height - textSize.height) / 2))
+        label.draw(at: CGPoint(x: (rect.width - textSize.width) / 2, y: (rect.height - textSize.height) / 2 - 0.3))
         return true
     }
     image.isTemplate = true
     return image
+}
+
+/// Custom template glyphs for toolbar buttons whose SF Symbols are too heavy, muddy at 16pt, or semantically vague.
+private enum ToolbarGlyphs {
+    private static func draw(_ body: @escaping () -> Void) -> NSImage {
+        let image = NSImage(size: CGSize(width: 18, height: 18), flipped: true) { _ in
+            NSColor.black.set()
+            body()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }
+
+    /// Airy fine-grid mosaic: light outer frame with spaced micro-squares so it never reads as a solid black block.
+    static func mosaic() -> NSImage {
+        draw {
+            let frame = NSBezierPath(roundedRect: NSRect(x: 2.25, y: 3.75, width: 13.5, height: 10.5), xRadius: 2, yRadius: 2)
+            frame.lineWidth = 1.25
+            frame.stroke()
+            let pitch: CGFloat = 2.6
+            let cell: CGFloat = 1.95
+            for row in 0..<3 {
+                for col in 0..<4 where (row + col).isMultiple(of: 2) {
+                    let x = 4.15 + CGFloat(col) * pitch
+                    let y = 5.4 + CGFloat(row) * pitch
+                    NSBezierPath(roundedRect: NSRect(x: x, y: y, width: cell, height: cell), xRadius: 0.35, yRadius: 0.35).fill()
+                }
+            }
+        }
+    }
+
+    /// Bubble-free "文 / A" line glyph: crisp at 1x and 2x and echoes the app icon's "文".
+    static func translate() -> NSImage {
+        draw {
+            let path = NSBezierPath()
+            path.lineWidth = 1.35
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            // "文" upper-left
+            path.move(to: NSPoint(x: 2.7, y: 5.0))
+            path.line(to: NSPoint(x: 9.5, y: 5.0))
+            path.move(to: NSPoint(x: 6.1, y: 3.1))
+            path.line(to: NSPoint(x: 6.1, y: 5.0))
+            path.move(to: NSPoint(x: 7.7, y: 5.0))
+            path.curve(to: NSPoint(x: 3.1, y: 11.2), controlPoint1: NSPoint(x: 7.2, y: 7.7), controlPoint2: NSPoint(x: 5.4, y: 9.9))
+            path.move(to: NSPoint(x: 4.6, y: 6.8))
+            path.curve(to: NSPoint(x: 8.2, y: 10.7), controlPoint1: NSPoint(x: 5.6, y: 8.4), controlPoint2: NSPoint(x: 6.8, y: 9.8))
+            // "A" lower-right
+            path.move(to: NSPoint(x: 9.9, y: 14.9))
+            path.line(to: NSPoint(x: 12.6, y: 8.0))
+            path.line(to: NSPoint(x: 15.3, y: 14.9))
+            path.move(to: NSPoint(x: 11.0, y: 12.5))
+            path.line(to: NSPoint(x: 14.2, y: 12.5))
+            path.stroke()
+        }
+    }
+
+    /// Classic 45-degree pushpin.
+    static func pin() -> NSImage {
+        draw {
+            let path = NSBezierPath()
+            path.lineWidth = 1.3
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            path.move(to: NSPoint(x: 10.35, y: 3.15))
+            path.line(to: NSPoint(x: 14.85, y: 7.65))
+            path.line(to: NSPoint(x: 13.7, y: 8.8))
+            path.line(to: NSPoint(x: 12.8, y: 8.55))
+            path.line(to: NSPoint(x: 9.9, y: 11.45))
+            path.line(to: NSPoint(x: 10.35, y: 13.05))
+            path.line(to: NSPoint(x: 9.3, y: 14.1))
+            path.line(to: NSPoint(x: 3.9, y: 8.7))
+            path.line(to: NSPoint(x: 4.95, y: 7.65))
+            path.line(to: NSPoint(x: 6.55, y: 8.1))
+            path.line(to: NSPoint(x: 9.45, y: 5.2))
+            path.line(to: NSPoint(x: 9.2, y: 4.3))
+            path.close()
+            path.move(to: NSPoint(x: 6.6, y: 11.4))
+            path.line(to: NSPoint(x: 3.15, y: 14.85))
+            path.stroke()
+        }
+    }
+
+    /// Bidirectional scroll arrows beside three aligned document lines.
+    static func longCapture() -> NSImage {
+        draw {
+            let path = NSBezierPath()
+            path.lineWidth = 1.3
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            path.move(to: NSPoint(x: 4.95, y: 3.6))
+            path.line(to: NSPoint(x: 4.95, y: 14.4))
+            path.move(to: NSPoint(x: 3.15, y: 5.4))
+            path.line(to: NSPoint(x: 4.95, y: 3.6))
+            path.line(to: NSPoint(x: 6.75, y: 5.4))
+            path.move(to: NSPoint(x: 3.15, y: 12.6))
+            path.line(to: NSPoint(x: 4.95, y: 14.4))
+            path.line(to: NSPoint(x: 6.75, y: 12.6))
+            for y in [5.0, 9.0, 13.0] as [CGFloat] {
+                path.move(to: NSPoint(x: 9.45, y: y))
+                path.line(to: NSPoint(x: 14.85, y: y))
+            }
+            path.stroke()
+        }
+    }
 }
 
 func symbolImage(_ name: String, size: CGFloat = 15, weight: NSFont.Weight = .regular) -> NSImage {
@@ -308,14 +420,15 @@ final class ToolbarView: PanelView {
             return button
         }
         for tool in Tool.allCases {
-            toolButtons[tool] = add(.tool(tool), symbolImage(tool.symbol, size: 16, weight: .light))
+            let icon = tool == .mosaic ? ToolbarGlyphs.mosaic() : symbolImage(tool.symbol, size: 16, weight: .light)
+            toolButtons[tool] = add(.tool(tool), icon)
         }
         undoButton = add(.undo, symbolImage("arrow.uturn.backward", size: 16, weight: .light))
         _ = add(.ocr, badgeImage("OCR"))
-        translateButton = add(.translate, symbolImage("translate", size: 16, weight: .light))
-        _ = add(.pin, symbolImage("pin", size: 16, weight: .light))
-        _ = add(.longCapture, symbolImage("arrow.up.and.down.text.horizontal", size: 16, weight: .light))
-        _ = add(.recordGIF, symbolImage("record.circle", size: 16, weight: .light))
+        translateButton = add(.translate, ToolbarGlyphs.translate())
+        _ = add(.pin, ToolbarGlyphs.pin())
+        _ = add(.longCapture, ToolbarGlyphs.longCapture())
+        _ = add(.recordGIF, badgeImage("GIF"))
         _ = add(.cancel, symbolImage("xmark", size: 16, weight: .light))
         _ = add(.save, symbolImage("square.and.arrow.down", size: 16, weight: .light))
         add(.done, symbolImage("checkmark", size: 16, weight: .regular)).tint = selectionBlue
